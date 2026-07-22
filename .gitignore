@@ -9,3 +9,6 @@ venv/
 
 # Claude Code internal directory
 .claude/
+
+# Pre-trained models (pkl files are Python-version-specific; app retrains on startup)
+models/

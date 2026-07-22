@@ -66,14 +66,20 @@ def load_or_train():
     df['FAGG%'] = df['FAGG'] / (df['FAGG'] + df['CAGG']).replace(0, np.nan)
 
     scaler_path = os.path.join(MODELS_DIR, 'scaler.pkl')
+    loaded = False
     if os.path.exists(scaler_path):
-        scaler = joblib.load(scaler_path)
-        models = {t: joblib.load(os.path.join(MODELS_DIR, f'model_{t}.pkl')) for t in TARGETS}
-    else:
+        try:
+            scaler = joblib.load(scaler_path)
+            models = {t: joblib.load(os.path.join(MODELS_DIR, f'model_{t}.pkl')) for t in TARGETS}
+            loaded = True
+        except Exception:
+            # pkl incompatible with current Python/sklearn version — retrain
+            loaded = False
+
+    if not loaded:
         X = df[ALL_FEATURES].fillna(0).values
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
-        joblib.dump(scaler, scaler_path)
 
         models = {}
         for target in TARGETS:
@@ -85,8 +91,16 @@ def load_or_train():
                 subsample=0.8, min_samples_leaf=3, random_state=42,
             )
             model.fit(X_tr, y_tr)
-            joblib.dump(model, os.path.join(MODELS_DIR, f'model_{target}.pkl'))
             models[target] = model
+
+        # Save for future reuse (best-effort; may fail in read-only environments)
+        try:
+            os.makedirs(MODELS_DIR, exist_ok=True)
+            joblib.dump(scaler, scaler_path)
+            for t, m in models.items():
+                joblib.dump(m, os.path.join(MODELS_DIR, f'model_{t}.pkl'))
+        except Exception:
+            pass
 
     rec = ConcreteRecommender(df, scaler, models)
     return df, rec
