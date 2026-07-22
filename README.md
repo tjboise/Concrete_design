@@ -2,7 +2,7 @@
 
 A data-driven web application that recommends concrete mix designs based on 756 field records collected for the New Jersey Department of Transportation (NJDOT).
 
-**🚀 Live App: [https://YOUR-APP-URL.streamlit.app](https://YOUR-APP-URL.streamlit.app)**
+**🚀 Live App: [https://concrete-design.streamlit.app/](https://concrete-design.streamlit.app/)**
 
 ---
 
