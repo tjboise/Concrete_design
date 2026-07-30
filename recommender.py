@@ -114,7 +114,10 @@ class ConcreteRecommender:
         df = df.sort_values('_margin').head(n_results).drop(columns='_margin')
 
         keep = RAW_FEATURES + ['TOTAL_BINDER', 'w/b', 'SCM%', '7day', '28day', '56day']
-        return df[keep].reset_index(drop=True).round(2)
+        result = df[keep].reset_index(drop=True)
+        # Force numeric dtype — pandas version differences can leave object columns
+        result = result.apply(pd.to_numeric, errors='coerce')
+        return result.round(2)
 
     # ------------------------------------------------------------------
     # Strategy 2 – Optimized new mix (differential evolution)

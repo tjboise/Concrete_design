@@ -57,6 +57,12 @@ def load_or_train():
     os.makedirs(MODELS_DIR, exist_ok=True)
     df = pd.read_csv(DATA_PATH)
 
+    # Force all material and strength columns to float (guards against CSV dtype inference issues)
+    numeric_cols = ['PC','FA','SC','SF','FAGG','CAGG','WATER','AEA','WR_HR','WR','ACC',
+                    '7day','28day','56day']
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
     # Ensure derived columns exist
     df['TOTAL_BINDER'] = df['PC'] + df['FA'] + df['SC'] + df['SF']
     df['w/b']   = df['WATER'] / df['TOTAL_BINDER'].replace(0, np.nan)
@@ -339,7 +345,7 @@ def main():
                 st.dataframe(
                     df_show.style
                         .highlight_max(subset=['28-Day (MPa)'], color='#DBEAFE')
-                        .format("{:.2f}"),
+                        .format("{:.2f}", na_rep="—"),
                     use_container_width=True,
                 )
 
