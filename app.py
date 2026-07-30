@@ -274,6 +274,12 @@ def main():
         if enable_7day:
             target_7 = st.slider("7-Day Minimum Strength (MPa)", 10, 70, 25, step=1)
 
+        enable_56day = st.checkbox("Also specify 56-day minimum")
+        target_56 = None
+        if enable_56day:
+            target_56 = st.slider("56-Day Minimum Strength (MPa)", 20, 110, 50, step=1,
+                                  help="Note: 56-day model trained on fewer records (235 vs 604); predictions are less certain.")
+
         st.subheader("Available SCMs")
         use_fa = st.checkbox("Fly Ash (FA)", value=True)
         use_sc = st.checkbox("Slag Cement (SC)", value=True)
@@ -305,7 +311,8 @@ def main():
                     target_28day=target_28,
                     use_fa=use_fa, use_sc=use_sc, use_sf=use_sf,
                     max_wb=max_wb, max_binder=max_binder,
-                    target_7day=target_7, n_results=n_hist,
+                    target_7day=target_7, target_56day=target_56,
+                    n_results=n_hist,
                 )
 
             if df_hist.empty:
@@ -354,7 +361,7 @@ def main():
                 result = rec.recommend_optimized(
                     target_28day=target_28,
                     use_fa=use_fa, use_sc=use_sc, use_sf=use_sf,
-                    max_wb=max_wb, target_7day=target_7,
+                    max_wb=max_wb, target_7day=target_7, target_56day=target_56,
                     min_binder=min_binder, max_binder=max_binder,
                 )
 

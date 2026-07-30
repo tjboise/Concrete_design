@@ -84,6 +84,7 @@ class ConcreteRecommender:
         max_wb: float = 0.55,
         max_binder: float = 700,
         target_7day: float | None = None,
+        target_56day: float | None = None,
         n_results: int = 5,
     ) -> pd.DataFrame:
         """Return top-N historical mixes satisfying all constraints."""
@@ -92,6 +93,9 @@ class ConcreteRecommender:
         df = df[df['28day'] >= target_28day]
         if target_7day is not None:
             df = df[df['7day'] >= target_7day]
+        if target_56day is not None:
+            # Only keep rows with a recorded 56-day result that meets the target
+            df = df[df['56day'] >= target_56day]
         if not use_fa:
             df = df[df['FA'] == 0]
         if not use_sc:
@@ -124,6 +128,7 @@ class ConcreteRecommender:
         use_sf: bool = False,
         max_wb: float = 0.55,
         target_7day: float | None = None,
+        target_56day: float | None = None,
         min_binder: float = 300,
         max_binder: float = 700,
         maxiter: int = 200,
@@ -165,6 +170,11 @@ class ConcreteRecommender:
             constraints.append(
                 NonlinearConstraint(lambda x: self._predict_raw(np.array(x), '7day'),
                                     target_7day, np.inf)
+            )
+        if target_56day is not None:
+            constraints.append(
+                NonlinearConstraint(lambda x: self._predict_raw(np.array(x), '56day'),
+                                    target_56day, np.inf)
             )
 
         result = differential_evolution(
