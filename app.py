@@ -9,12 +9,12 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import joblib
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.preprocessing import StandardScaler
+from catboost import CatBoostRegressor
 
 from recommender import (
-    ConcreteRecommender, compute_derived_vector,
-    RAW_FEATURES, ALL_FEATURES, TARGETS,
+    ConcreteRecommender, compute_derived_df, compute_gwp,
+    RAW_FEATURES, FEATURES_7D, FEATURES_28D, FEATURES_56D,
+    BOUNDS_L1, GWP_COEF,
 )
 
 warnings.filterwarnings('ignore')
@@ -28,94 +28,108 @@ st.set_page_config(
     layout="wide",
 )
 
-BASE_DIR   = os.path.dirname(__file__)
-DATA_PATH  = os.path.join(BASE_DIR, 'Super_Cleaned_Concrete_Data - backup.csv')
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+DATA_PATH  = os.path.join(BASE_DIR, 'Concrete_Data_SI_clean.csv')
 MODELS_DIR = os.path.join(BASE_DIR, 'models')
 
-# Admixture features are in mL/100 kg — not converted by mass unit toggle
-ADMIX_FEATURES = {'AEA', 'WR_HR', 'WR', 'ACC'}
-MASS_FEATURES  = [f for f in RAW_FEATURES if f not in ADMIX_FEATURES]
+NJDOT_BLUE = '#003087'
+GREEN      = '#10B981'
+AMBER      = '#F59E0B'
+RED        = '#EF4444'
 
 MATERIAL_LABELS = {
     'PC':    'Portland Cement',
     'FA':    'Fly Ash',
     'SC':    'Slag Cement',
-    'SF':    'Silica Fume',
     'FAGG':  'Fine Aggregate',
     'CAGG':  'Coarse Aggregate',
     'WATER': 'Water',
-    'AEA':   'Air-Entraining Agent (mL/100 kg)',
-    'WR_HR': 'High-Range Water Reducer (mL/100 kg)',
-    'WR':    'Water Reducer (mL/100 kg)',
-    'ACC':   'Accelerator (mL/100 kg)',
+    'AEA':   'Air-Entraining Agent',
+    'WR_HR': 'High-Range WR',
+    'WR':    'Water Reducer',
+    'ACC':   'Accelerator',
 }
+ADMIX = {'AEA', 'WR_HR', 'WR', 'ACC'}
 
-# Unit conversion factors
-UNIT_S = {'Metric': 1.0,      'Imperial': 145.038}   # MPa  → psi
-UNIT_M = {'Metric': 1.0,      'Imperial': 1.68556}   # kg/m³ → lb/yd³
-UNIT_SL = {'Metric': 'MPa',   'Imperial': 'psi'}
-UNIT_ML = {'Metric': 'kg/m³', 'Imperial': 'lb/yd³'}
-
-NJDOT_BLUE = '#003087'
-COLORS = dict(primary=NJDOT_BLUE, success='#10B981',
-              warning='#F59E0B', danger='#EF4444')
+UNIT_S  = {'Metric': 1.0,      'Imperial': 145.038}
+UNIT_M  = {'Metric': 1.0,      'Imperial': 1.68556}
+UNIT_SL = {'Metric': 'MPa',    'Imperial': 'psi'}
+UNIT_ML = {'Metric': 'kg/m³',  'Imperial': 'lb/yd³'}
 
 
 # ---------------------------------------------------------------------------
-# Model loading / auto-training
+# Model loading / auto-training (CatBoost Chain)
 # ---------------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def load_or_train():
-    from sklearn.model_selection import train_test_split
     os.makedirs(MODELS_DIR, exist_ok=True)
-    df = pd.read_csv(DATA_PATH)
+    df_raw = pd.read_csv(DATA_PATH)
 
-    numeric_cols = ['PC','FA','SC','SF','FAGG','CAGG','WATER','AEA','WR_HR','WR','ACC',
-                    '7day','28day','56day']
-    for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
+    num_cols = RAW_FEATURES + ['7day', '28day', '56day']
+    for c in num_cols:
+        if c in df_raw.columns:
+            df_raw[c] = pd.to_numeric(df_raw[c], errors='coerce')
 
-    df['TOTAL_BINDER'] = df['PC'] + df['FA'] + df['SC'] + df['SF']
-    df['w/b']   = df['WATER'] / df['TOTAL_BINDER'].replace(0, np.nan)
-    df['b/a']   = df['TOTAL_BINDER'] / (df['FAGG'] + df['CAGG']).replace(0, np.nan)
-    df['SCM%']  = (df['FA'] + df['SC'] + df['SF']) / df['TOTAL_BINDER'].replace(0, np.nan)
-    df['CAGG%'] = df['CAGG'] / (df['FAGG'] + df['CAGG']).replace(0, np.nan)
-    df['FAGG%'] = df['FAGG'] / (df['FAGG'] + df['CAGG']).replace(0, np.nan)
+    df = compute_derived_df(df_raw)
 
-    scaler_path = os.path.join(MODELS_DIR, 'scaler.pkl')
+    p7  = os.path.join(MODELS_DIR, 'model_7d.cbm')
+    p28 = os.path.join(MODELS_DIR, 'model_28d.cbm')
+    p56 = os.path.join(MODELS_DIR, 'model_56d.cbm')
+
     loaded = False
-    if os.path.exists(scaler_path):
-        try:
-            scaler = joblib.load(scaler_path)
-            models = {t: joblib.load(os.path.join(MODELS_DIR, f'model_{t}.pkl')) for t in TARGETS}
-            loaded = True
-        except Exception:
-            loaded = False
+    model_7d  = CatBoostRegressor()
+    model_28d = CatBoostRegressor()
+    model_56d = CatBoostRegressor()
+    try:
+        model_7d.load_model(p7)
+        model_28d.load_model(p28)
+        model_56d.load_model(p56)
+        loaded = True
+    except Exception:
+        pass
 
     if not loaded:
-        X = df[ALL_FEATURES].fillna(0).values
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-        models = {}
-        for target in TARGETS:
-            mask = df[target].notna().values
-            X_t, y_t = X_scaled[mask], df.loc[mask, target].values
-            X_tr, _, y_tr, _ = train_test_split(X_t, y_t, test_size=0.2, random_state=42)
-            model = GradientBoostingRegressor(
-                n_estimators=500, max_depth=4, learning_rate=0.04,
-                subsample=0.8, min_samples_leaf=3, random_state=42,
-            )
-            model.fit(X_tr, y_tr)
-            models[target] = model
+        cb_params = dict(
+            iterations=500, learning_rate=0.05, depth=6,
+            loss_function='RMSE', verbose=False, random_seed=42,
+        )
+
+        # Chain model 1 — 7-day
+        mask7 = df['7day'].notna()
+        X7 = df.loc[mask7, FEATURES_7D].fillna(0).values
+        y7 = df.loc[mask7, '7day'].values
+        model_7d = CatBoostRegressor(**cb_params)
+        model_7d.fit(X7, y7)
+
+        # Chain model 2 — 28-day (uses actual 7day as chain input)
+        mask28 = df['28day'].notna() & df['7day'].notna()
+        X28_base = df.loc[mask28, FEATURES_28D[:-1]].fillna(0).values  # all but '7day'
+        chain_7  = df.loc[mask28, '7day'].values.reshape(-1, 1)
+        X28 = np.hstack([X28_base, chain_7])
+        y28 = df.loc[mask28, '28day'].values
+        model_28d = CatBoostRegressor(**cb_params)
+        model_28d.fit(X28, y28)
+
+        # Chain model 3 — 56-day
+        mask56 = df['56day'].notna() & df['7day'].notna() & df['28day'].notna()
+        X56_base = df.loc[mask56, FEATURES_56D[:-2]].fillna(0).values
+        chain_56 = np.hstack([
+            df.loc[mask56, '7day'].values.reshape(-1, 1),
+            df.loc[mask56, '28day'].values.reshape(-1, 1),
+        ])
+        X56 = np.hstack([X56_base, chain_56])
+        y56 = df.loc[mask56, '56day'].values
+        model_56d = CatBoostRegressor(**cb_params)
+        model_56d.fit(X56, y56)
+
         try:
-            os.makedirs(MODELS_DIR, exist_ok=True)
-            joblib.dump(scaler, scaler_path)
-            for t, m in models.items():
-                joblib.dump(m, os.path.join(MODELS_DIR, f'model_{t}.pkl'))
+            model_7d.save_model(p7)
+            model_28d.save_model(p28)
+            model_56d.save_model(p56)
         except Exception:
             pass
 
-    rec = ConcreteRecommender(df, scaler, models)
+    rec = ConcreteRecommender(df, model_7d, model_28d, model_56d)
     return df, rec
 
 
@@ -123,155 +137,152 @@ def load_or_train():
 # Chart helpers
 # ---------------------------------------------------------------------------
 
-def chart_material_comparison(df_hist: pd.DataFrame, um: float, ml: str) -> go.Figure:
-    show = ['PC', 'FA', 'SC', 'SF', 'FAGG', 'CAGG', 'WATER']
-    label_map = {
-        'PC': 'Portland Cement', 'FA': 'Fly Ash', 'SC': 'Slag Cement',
-        'SF': 'Silica Fume', 'FAGG': 'Fine Agg.', 'CAGG': 'Coarse Agg.', 'WATER': 'Water',
-    }
-    palette = [NJDOT_BLUE, '#1D6FA4', '#34D399', '#6EE7B7', '#D1D5DB', '#9CA3AF', '#F59E0B']
+def pareto_chart(solutions: list[dict], selected_idx: int,
+                 us: float, sl: str) -> go.Figure:
+    gwps = [s['gwp'] for s in solutions]
+    strs = [s['strength_28d'] * us for s in solutions]
+
     fig = go.Figure()
-    labels = [f"Mix {i+1}" for i in range(len(df_hist))]
-    for i, col in enumerate(show):
-        if col not in df_hist.columns:
-            continue
-        fig.add_trace(go.Bar(
-            name=label_map.get(col, col),
-            x=labels,
-            y=(df_hist[col] * um).tolist(),
-            marker_color=palette[i],
-        ))
+
+    # All Pareto solutions
+    fig.add_trace(go.Scatter(
+        x=gwps, y=strs,
+        mode='markers+lines',
+        name='Pareto Front',
+        marker=dict(size=10, color=NJDOT_BLUE, opacity=0.7),
+        line=dict(color=NJDOT_BLUE, width=1, dash='dot'),
+        hovertemplate='GWP: %{x:.1f} kg CO₂/m³<br>28-Day: %{y:.1f} ' + sl + '<extra></extra>',
+    ))
+
+    # Selected solution
+    fig.add_trace(go.Scatter(
+        x=[gwps[selected_idx]], y=[strs[selected_idx]],
+        mode='markers',
+        name='Selected',
+        marker=dict(size=18, color=RED, symbol='star'),
+        hovertemplate='Selected<br>GWP: %{x:.1f}<br>Strength: %{y:.1f} ' + sl + '<extra></extra>',
+    ))
+
+    # Ideal point annotation
+    fig.add_annotation(
+        x=min(gwps), y=max(strs),
+        text='Ideal\n(unachievable)',
+        showarrow=True, arrowhead=2,
+        ax=30, ay=-30,
+        font=dict(size=10, color='gray'),
+        arrowcolor='gray',
+    )
+
     fig.update_layout(
-        barmode='group', height=340,
-        legend=dict(orientation='h', y=-0.28),
-        yaxis_title=f'Quantity ({ml})',
+        xaxis_title='GWP (kg CO₂-eq / m³)  ←  Lower is better',
+        yaxis_title=f'28-Day Strength ({sl})  ↑  Higher is better',
+        height=380, margin=dict(t=20, b=40, l=40, r=20),
+        legend=dict(orientation='h', y=-0.22),
+        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+    )
+    return fig
+
+
+def gauge_chart(predicted: dict, target_28: float, us: float, sl: str) -> go.Figure:
+    max_val = 120 * us
+    specs   = [[{'type': 'indicator'}] * 3]
+    fig     = make_subplots(rows=1, cols=3, specs=specs)
+
+    for col_i, (key, lbl, thr) in enumerate([
+        ('7day',  '7-Day',  None),
+        ('28day', '28-Day', target_28 * us if target_28 else None),
+        ('56day', '56-Day', None),
+    ], start=1):
+        val = (predicted.get(key) or 0) * us
+        gauge_cfg = {
+            'axis': {'range': [0, max_val]},
+            'bar':  {'color': NJDOT_BLUE},
+            'steps': [
+                {'range': [0, max_val*.4],  'color': '#FEE2E2'},
+                {'range': [max_val*.4, max_val*.65], 'color': '#FEF9C3'},
+                {'range': [max_val*.65, max_val], 'color': '#DCFCE7'},
+            ],
+        }
+        if thr:
+            gauge_cfg['threshold'] = {
+                'line': {'color': RED, 'width': 3},
+                'thickness': 0.75, 'value': thr,
+            }
+        fig.add_trace(go.Indicator(
+            mode='gauge+number',
+            value=val,
+            title={'text': f'<b>{lbl}</b><br><span style="font-size:0.75em;color:gray">{sl}</span>'},
+            number={'font': {'size': 22}, 'valueformat': '.1f'},
+            gauge=gauge_cfg,
+        ), row=1, col=col_i)
+
+    fig.update_layout(
+        height=240, margin=dict(t=50, b=10, l=20, r=20),
+        paper_bgcolor='rgba(0,0,0,0)',
+    )
+    return fig
+
+
+def gwp_breakdown_chart(mix: dict) -> go.Figure:
+    labels, vals, colors = [], [], []
+    palette = [NJDOT_BLUE, '#60A5FA', '#34D399', '#FCA5A5', '#D1D5DB', '#F59E0B']
+    for i, (mat, coef) in enumerate(GWP_COEF.items()):
+        v = mix.get(mat, 0) * coef
+        if v > 0.5:
+            labels.append(MATERIAL_LABELS.get(mat, mat))
+            vals.append(round(v, 1))
+            colors.append(palette[i % len(palette)])
+    fig = go.Figure(go.Bar(
+        x=vals, y=labels, orientation='h',
+        marker_color=colors,
+        text=[f'{v:.1f}' for v in vals],
+        textposition='auto',
+    ))
+    fig.update_layout(
+        height=220, xaxis_title='kg CO₂-eq / m³',
         margin=dict(t=10, b=10, l=0, r=0),
         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
     )
     return fig
 
 
-def chart_strength_comparison(df_hist: pd.DataFrame, target_28_mpa: float,
-                               us: float, sl: str) -> go.Figure:
-    labels = [f"Mix {i+1}" for i in range(len(df_hist))]
-    fig = go.Figure()
-    for col, lbl, color in [('7day','7-Day','#60A5FA'),
-                             ('28day','28-Day', NJDOT_BLUE),
-                             ('56day','56-Day','#1E3A8A')]:
-        if col in df_hist.columns:
-            fig.add_trace(go.Scatter(
-                x=labels,
-                y=(df_hist[col] * us).tolist(),
-                mode='lines+markers', name=lbl,
-                line=dict(color=color, width=2), marker=dict(size=8),
-            ))
-    fig.add_hline(
-        y=target_28_mpa * us, line_dash='dash', line_color=COLORS['danger'],
-        annotation_text=f"Target 28-Day: {target_28_mpa*us:.0f} {sl}",
-        annotation_position="bottom right",
-    )
-    fig.update_layout(
-        height=300, yaxis_title=f'Compressive Strength ({sl})',
-        legend=dict(orientation='h', y=-0.35),
-        margin=dict(t=10, b=10, l=0, r=0),
-        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-    )
-    return fig
-
-
-def chart_mix_pie(mix: dict) -> go.Figure:
-    label_map = {
-        'PC': 'Portland Cement', 'FA': 'Fly Ash', 'SC': 'Slag Cement',
-        'SF': 'Silica Fume', 'FAGG': 'Fine Aggregate',
-        'CAGG': 'Coarse Aggregate', 'WATER': 'Water',
-    }
-    labels, values = [], []
+def mix_pie_chart(mix: dict) -> go.Figure:
+    label_map = {k: MATERIAL_LABELS[k] for k in ['PC','FA','SC','FAGG','CAGG','WATER']}
+    lbls, vals = [], []
     for k, lbl in label_map.items():
         v = mix.get(k, 0)
         if v > 1:
-            labels.append(lbl)
-            values.append(round(v, 1))
+            lbls.append(lbl); vals.append(round(v, 1))
+    palette = [NJDOT_BLUE,'#1D6FA4','#34D399','#6EE7B7','#D1D5DB','#F59E0B']
     fig = go.Figure(go.Pie(
-        labels=labels, values=values, hole=0.4,
-        marker=dict(colors=[NJDOT_BLUE,'#1D6FA4','#34D399','#6EE7B7',
-                             '#D1D5DB','#9CA3AF','#F59E0B']),
-        textinfo='label+percent',
+        labels=lbls, values=vals, hole=0.35,
+        marker=dict(colors=palette), textinfo='label+percent',
     ))
     fig.update_layout(
-        height=280, showlegend=False,
+        height=260, showlegend=False,
         margin=dict(t=10, b=0, l=0, r=0),
         paper_bgcolor='rgba(0,0,0,0)',
     )
     return fig
 
 
-def gauge_chart(predicted: dict, target_28_mpa: float, us: float, sl: str) -> go.Figure:
-    """Three gauge dials for 7 / 28 / 56-day predicted strength."""
-    max_val = 120 * us
-    specs = [[{'type': 'indicator'}, {'type': 'indicator'}, {'type': 'indicator'}]]
-    fig = make_subplots(rows=1, cols=3, specs=specs)
-
-    entries = [
-        ('7day',  '7-Day',  None),
-        ('28day', '28-Day', target_28_mpa * us),
-        ('56day', '56-Day', None),
-    ]
-    for col_idx, (key, lbl, threshold_val) in enumerate(entries, start=1):
-        val = (predicted.get(key) or 0) * us
-        gauge_cfg = {
-            'axis': {'range': [0, max_val], 'tickwidth': 1, 'tickcolor': 'gray'},
-            'bar': {'color': NJDOT_BLUE},
-            'bgcolor': 'rgba(0,0,0,0)',
-            'steps': [
-                {'range': [0, max_val * 0.4], 'color': '#FEE2E2'},
-                {'range': [max_val * 0.4, max_val * 0.65], 'color': '#FEF9C3'},
-                {'range': [max_val * 0.65, max_val], 'color': '#DCFCE7'},
-            ],
-        }
-        if threshold_val is not None:
-            gauge_cfg['threshold'] = {
-                'line': {'color': COLORS['danger'], 'width': 3},
-                'thickness': 0.75,
-                'value': threshold_val,
-            }
-        fig.add_trace(
-            go.Indicator(
-                mode='gauge+number',
-                value=val,
-                title={'text': f'<b>{lbl}</b><br><span style="font-size:0.75em;color:gray">{sl}</span>'},
-                number={'font': {'size': 22}, 'valueformat': '.1f'},
-                gauge=gauge_cfg,
-            ),
-            row=1, col=col_idx,
-        )
-
-    fig.update_layout(
-        height=240,
-        margin=dict(t=50, b=10, l=20, r=20),
-        paper_bgcolor='rgba(0,0,0,0)',
-    )
-    return fig
-
-
-def chart_strength_curve(predicted: dict, target_28_mpa: float,
-                          us: float, sl: str) -> go.Figure:
-    days = [7, 28, 56]
-    vals = [(predicted.get(k) or 0) * us for k in ['7day', '28day', '56day']]
+def hist_material_chart(df_hist: pd.DataFrame, um: float, ml: str) -> go.Figure:
+    show = ['PC','FA','SC','FAGG','CAGG','WATER']
+    palette = [NJDOT_BLUE,'#1D6FA4','#34D399','#6EE7B7','#D1D5DB','#F59E0B']
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=days, y=vals, mode='lines+markers',
-        name='Predicted',
-        line=dict(color=NJDOT_BLUE, width=3), marker=dict(size=10),
-        fill='tozeroy', fillcolor='rgba(0,48,135,0.10)',
-    ))
-    fig.add_hline(
-        y=target_28_mpa * us, line_dash='dash', line_color=COLORS['danger'],
-        annotation_text=f"Target {target_28_mpa*us:.0f} {sl}",
-    )
+    for i, col in enumerate(show):
+        if col not in df_hist.columns: continue
+        fig.add_trace(go.Bar(
+            name=MATERIAL_LABELS[col],
+            x=[f'Mix {j+1}' for j in range(len(df_hist))],
+            y=(df_hist[col] * um).tolist(),
+            marker_color=palette[i],
+        ))
     fig.update_layout(
-        xaxis=dict(tickvals=[7, 28, 56], title='Age (days)'),
-        yaxis_title=f'Compressive Strength ({sl})',
-        height=260, margin=dict(t=10, b=10, l=0, r=0),
+        barmode='group', height=300,
+        yaxis_title=f'Quantity ({ml})',
+        legend=dict(orientation='h', y=-0.35),
+        margin=dict(t=10, b=10, l=0, r=0),
         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
     )
     return fig
@@ -281,47 +292,45 @@ def chart_strength_curve(predicted: dict, target_28_mpa: float,
 # Export helpers
 # ---------------------------------------------------------------------------
 
+def pareto_csv(solutions: list[dict]) -> str:
+    rows = []
+    for i, s in enumerate(solutions):
+        row = {'Solution': i+1, 'GWP_kg_CO2_m3': round(s['gwp'], 2),
+               'Pred_28d_MPa': round(s['strength_28d'], 2),
+               'Total_Cementitious_kg_m3': round(s['total_binder'], 1),
+               'wb_ratio': round(s['wb_ratio'], 3),
+               'SCM_pct': round(s['scm_pct']*100, 1)}
+        for f in RAW_FEATURES:
+            row[f'{f}_kg_m3'] = round(s['mix'].get(f, 0), 2)
+        rows.append(row)
+    return pd.DataFrame(rows).to_csv(index=False)
+
+
 def hist_csv(df_hist: pd.DataFrame) -> str:
     return df_hist.to_csv(index=False)
 
 
-def opt_csv(mix: dict, predicted: dict, tb: float, wb: float | None,
-            scm_pct: float) -> str:
-    rows = [{'Parameter': MATERIAL_LABELS.get(k, k) + ' (kg/m³)', 'Value': round(v, 1)}
-            for k, v in mix.items() if v > 0.5]
-    rows += [
-        {'Parameter': 'Total Cementitious (kg/m³)', 'Value': round(tb, 1)},
-        {'Parameter': 'w/cm Ratio',                 'Value': round(wb, 3) if wb else '—'},
-        {'Parameter': 'SCM Replacement (%)',         'Value': round(scm_pct * 100, 1)},
-        {'Parameter': 'Pred. 7-Day (MPa)',           'Value': round(predicted.get('7day', 0), 1)},
-        {'Parameter': 'Pred. 28-Day (MPa)',          'Value': round(predicted.get('28day', 0), 1)},
-        {'Parameter': 'Pred. 56-Day (MPa)',          'Value': round(predicted.get('56day', 0), 1)},
-    ]
-    return pd.DataFrame(rows).to_csv(index=False)
-
-
 # ---------------------------------------------------------------------------
-# Main
+# Main app
 # ---------------------------------------------------------------------------
 
 def main():
-    # Header
     st.markdown(
         f"<h2 style='color:{NJDOT_BLUE};margin-bottom:0'>🏗️ Concrete Mix Design Advisor</h2>",
         unsafe_allow_html=True,
     )
     st.caption(
         "**NJDOT — New Jersey Department of Transportation** | "
-        "756 field records · Historical similar mixes & optimized new mix"
+        "667 field records · CatBoost-Chain surrogate · NSGA-II Pareto optimization"
     )
     st.divider()
 
-    with st.spinner("Loading prediction models… (first run trains automatically, ~30 s)"):
+    with st.spinner("Loading models… (first run trains CatBoost Chain, ~30–60 s)"):
         df, rec = load_or_train()
 
     st.success(
         f"✅ Models ready — **{len(df)} mix records** | "
-        "7-day R²=0.71 · 28-day R²=0.80 · 56-day R²=0.79"
+        "CatBoost Chain (7d → 28d → 56d)"
     )
 
     # -----------------------------------------------------------------------
@@ -330,148 +339,280 @@ def main():
     with st.sidebar:
         st.header("Design Parameters")
 
-        # ── Unit system ──────────────────────────────────────────────────
         unit_sys = st.radio("Unit System", ["Metric", "Imperial"], horizontal=True)
-        us  = UNIT_S[unit_sys]   # strength multiplier
-        um  = UNIT_M[unit_sys]   # mass multiplier
-        sl  = UNIT_SL[unit_sys]  # strength label
-        ml  = UNIT_ML[unit_sys]  # mass label
+        us = UNIT_S[unit_sys]; um = UNIT_M[unit_sys]
+        sl = UNIT_SL[unit_sys]; ml = UNIT_ML[unit_sys]
         st.divider()
 
-        # ── Target strength ──────────────────────────────────────────────
-        st.subheader("Target Strength")
+        st.subheader("Objectives & Constraints")
         if unit_sys == 'Metric':
-            target_28_disp = st.slider("28-Day Strength (MPa)", 20, 100, 40, step=1)
-            target_28_mpa  = float(target_28_disp)
+            min_28d_val = st.slider("Min 28-Day Strength (MPa)", 20, 80, 30, step=1)
+            min_28d_mpa = float(min_28d_val)
+            max_gwp_val = st.slider("Max GWP (kg CO₂-eq/m³)", 150, 550, 500, step=10)
         else:
-            target_28_disp = st.slider("28-Day Strength (psi)", 2900, 14500, 5800, step=100)
-            target_28_mpa  = target_28_disp / 145.038
+            min_28d_val = st.slider("Min 28-Day Strength (psi)", 2900, 11600, 4350, step=100)
+            min_28d_mpa = min_28d_val / 145.038
+            max_gwp_val = st.slider("Max GWP (kg CO₂-eq/m³)", 150, 550, 500, step=10)
 
-        enable_7day = st.checkbox("Also set 7-day minimum")
-        target_7_mpa = None
-        if enable_7day:
-            if unit_sys == 'Metric':
-                target_7_mpa = float(st.slider("7-Day Minimum (MPa)", 10, 70, 25, step=1))
-            else:
-                target_7_mpa = st.slider("7-Day Minimum (psi)", 1450, 10000, 3600, step=100) / 145.038
-
-        enable_56day = st.checkbox("Also set 56-day minimum")
-        target_56_mpa = None
-        if enable_56day:
-            if unit_sys == 'Metric':
-                target_56_mpa = float(st.slider("56-Day Minimum (MPa)", 20, 110, 50, step=1,
-                                                 help="56-day model trained on fewer records (235); predictions are less certain."))
-            else:
-                target_56_mpa = st.slider("56-Day Minimum (psi)", 2900, 16000, 7300, step=100,
-                                           help="56-day model trained on fewer records (235); predictions are less certain.") / 145.038
-
-        # ── SCMs ─────────────────────────────────────────────────────────
         st.subheader("Available SCMs")
         use_fa = st.checkbox("Fly Ash (FA)", value=True)
         use_sc = st.checkbox("Slag Cement (SC)", value=True)
-        use_sf = st.checkbox("Silica Fume (SF)", value=False)
-
-        # ── Constraints ───────────────────────────────────────────────────
-        st.subheader("Mix Constraints")
-        max_wb = st.slider("Maximum w/cm Ratio", 0.30, 0.60, 0.50, step=0.01)
-
-        if unit_sys == 'Metric':
-            max_binder = st.slider("Max Total Cementitious (kg/m³)", 400, 800, 650, step=10)
-            min_binder = st.slider("Min Total Cementitious (kg/m³)", 200, 500, 300, step=10)
-        else:
-            max_binder = st.slider("Max Total Cementitious (lb/yd³)", 675, 1350, 1095, step=17) / 1.68556
-            min_binder = st.slider("Min Total Cementitious (lb/yd³)", 337, 843, 506, step=17) / 1.68556
-
-        st.subheader("Results")
-        n_hist = st.slider("Historical mixes to return", 3, 10, 5)
         st.divider()
-        run_btn = st.button("🔍 Get Recommendations", type="primary", use_container_width=True)
+
+        st.subheader("NSGA-II Settings")
+        pop_size = st.select_slider("Population Size", [50, 100, 200], value=100)
+        n_gen    = st.select_slider("Generations",     [50, 100, 200], value=100)
+        st.divider()
+
+        st.subheader("Historical Filter")
+        max_wb_hist = st.slider("Max w/cm (historical)", 0.30, 0.72, 0.60, step=0.01)
+        n_hist      = st.slider("Historical mixes to show", 3, 10, 5)
+        st.divider()
+
+        run_pareto = st.button("🚀 Run Pareto Search",    type="primary", use_container_width=True)
+        run_hist   = st.button("🔍 Find Historical Mixes", use_container_width=True)
 
     # -----------------------------------------------------------------------
-    # Run computations and cache in session state
+    # Run computations → session state
     # -----------------------------------------------------------------------
-    if run_btn:
-        df_hist = rec.recommend_historical(
-            target_28day=target_28_mpa,
-            use_fa=use_fa, use_sc=use_sc, use_sf=use_sf,
-            max_wb=max_wb, max_binder=max_binder,
-            target_7day=target_7_mpa, target_56day=target_56_mpa,
-            n_results=n_hist,
-        )
-        st.session_state['hist_result']  = df_hist
-        st.session_state['target_28_mpa'] = target_28_mpa
-
-        with st.spinner("Running optimization — typically 20–50 seconds…"):
-            opt_result = rec.recommend_optimized(
-                target_28day=target_28_mpa,
-                use_fa=use_fa, use_sc=use_sc, use_sf=use_sf,
-                max_wb=max_wb, target_7day=target_7_mpa, target_56day=target_56_mpa,
-                min_binder=min_binder, max_binder=max_binder,
+    if run_pareto:
+        with st.spinner(f"Running NSGA-II (pop={pop_size}, gen={n_gen})…"):
+            solutions = rec.run_nsga2(
+                use_fa=use_fa, use_sc=use_sc,
+                min_28d=min_28d_mpa, max_gwp=max_gwp_val,
+                pop_size=pop_size, n_gen=n_gen,
             )
-        st.session_state['opt_result'] = opt_result
-        # Clear any previous adjustment result
+        st.session_state['pareto_solutions'] = solutions
+        st.session_state['pareto_params']    = {
+            'min_28d_mpa': min_28d_mpa, 'max_gwp': max_gwp_val,
+        }
         st.session_state.pop('adj_predicted', None)
+
+    if run_hist:
+        df_hist = rec.recommend_historical(
+            min_28d=min_28d_mpa, max_gwp=max_gwp_val,
+            use_fa=use_fa, use_sc=use_sc,
+            max_wb=max_wb_hist, n_results=n_hist,
+        )
+        st.session_state['hist_result']    = df_hist
+        st.session_state['hist_min_28d']   = min_28d_mpa
 
     # -----------------------------------------------------------------------
     # Tabs
     # -----------------------------------------------------------------------
-    tab1, tab2 = st.tabs(["📚 Historical Similar Mixes", "⚗️ Optimized New Mix"])
+    tab1, tab2 = st.tabs(["🌿 Pareto Front", "📚 Historical Similar Mixes"])
 
-    # ── Tab 1 ───────────────────────────────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════════════════
+    # Tab 1 — Pareto Front
+    # ═══════════════════════════════════════════════════════════════════════
     with tab1:
+        if 'pareto_solutions' not in st.session_state:
+            st.info(
+                "Set parameters in the sidebar and click **🚀 Run Pareto Search** to "
+                "generate Pareto-optimal mixes that trade off GWP vs compressive strength."
+            )
+            with st.expander("ℹ️ About the optimization"):
+                st.markdown(f"""
+**Objectives** (conflicting):
+- 🟢 **Minimize GWP** = PC × 1.048 + FA × 0.328 + SC × 0.264 + CAGG × 0.0037 + FAGG × 0.0026
+- 🔵 **Maximize 28-Day Strength** — predicted by CatBoost-Chain surrogate
+
+**Algorithm**: NSGA-II (Non-dominated Sorting Genetic Algorithm II)
+
+**Three constraint layers**:
+1. Raw ingredient bounds (kg/m³)
+2. Derived ratio bounds (w/cm, b/a, SCM%, aggregate fractions)
+3. Physics constraints (total volume, aggregate volume fraction)
+
+**Pareto front**: the set of solutions where no objective can be improved without worsening the other.
+The dataset covers {len(df)} mixes with GWP ranging **{df['GWP'].min():.0f}–{df['GWP'].max():.0f} kg CO₂/m³**
+and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
+                """)
+        else:
+            solutions = st.session_state['pareto_solutions']
+
+            if not solutions:
+                st.warning("No feasible solutions found. Try relaxing the GWP limit or strength target.")
+            else:
+                n_sol = len(solutions)
+                params = st.session_state['pareto_params']
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Pareto Solutions", n_sol)
+                c2.metric("GWP Range",
+                          f"{solutions[0]['gwp']:.0f}–{solutions[-1]['gwp']:.0f} kg CO₂/m³")
+                c3.metric("Strength Range",
+                          f"{solutions[0]['strength_28d']*us:.0f}–{solutions[-1]['strength_28d']*us:.0f} {sl}")
+                c4.metric("Min 28-Day Constraint",
+                          f"{params['min_28d_mpa']*us:.0f} {sl}")
+
+                st.divider()
+
+                # ── Preference slider ─────────────────────────────────────
+                st.markdown("**Select Your Preferred Solution**")
+                pref = st.slider(
+                    "Preference weight",
+                    min_value=0, max_value=100, value=50, step=1,
+                    format="%d",
+                    help="0 = maximize strength (ignore GWP)   |   100 = minimize GWP (ignore strength)",
+                )
+                col_l, col_r = st.columns(2)
+                col_l.caption("← Maximize Strength")
+                col_r.markdown("<div style='text-align:right'>Minimize GWP →</div>",
+                               unsafe_allow_html=True)
+
+                # Score each Pareto solution
+                gwps = np.array([s['gwp'] for s in solutions])
+                strs = np.array([s['strength_28d'] for s in solutions])
+                g_min, g_rng = gwps.min(), max(gwps.max() - gwps.min(), 1e-9)
+                s_min, s_rng = strs.min(), max(strs.max() - strs.min(), 1e-9)
+                w = pref / 100
+                scores = (1 - w) * (strs - s_min) / s_rng - w * (gwps - g_min) / g_rng
+                sel = int(np.argmax(scores))
+
+                # Pareto chart
+                st.plotly_chart(pareto_chart(solutions, sel, us, sl),
+                                use_container_width=True)
+
+                st.divider()
+                sol = solutions[sel]
+                mix = sol['mix']
+
+                st.subheader(f"Selected Mix — Solution #{sel+1}")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("GWP", f"{sol['gwp']:.1f} kg CO₂/m³")
+                m2.metric("Pred. 28-Day", f"{sol['strength_28d']*us:.1f} {sl}")
+                m3.metric("Total Cementitious", f"{sol['total_binder']:.0f} kg/m³")
+                m4.metric("w/cm Ratio", f"{sol['wb_ratio']:.3f}")
+
+                col_a, col_b = st.columns([1, 1])
+                with col_a:
+                    st.markdown("**Mix Proportions**")
+                    mix_df = pd.DataFrame([
+                        {'Material': MATERIAL_LABELS.get(k, k),
+                         'Quantity (kg/m³)': round(v, 2)}
+                        for k, v in mix.items() if v > 0.05
+                    ])
+                    st.dataframe(mix_df, hide_index=True, use_container_width=True)
+
+                    st.markdown("**GWP Breakdown**")
+                    st.plotly_chart(gwp_breakdown_chart(mix), use_container_width=True)
+
+                with col_b:
+                    st.markdown("**Mix Composition**")
+                    st.plotly_chart(mix_pie_chart(mix), use_container_width=True)
+
+                st.markdown("**Predicted Compressive Strength**")
+                st.plotly_chart(
+                    gauge_chart(sol['predicted'], params['min_28d_mpa'], us, sl),
+                    use_container_width=True,
+                )
+
+                # Download
+                st.download_button(
+                    "📥 Download Full Pareto Front (CSV)",
+                    data=pareto_csv(solutions),
+                    file_name="njdot_pareto_front.csv",
+                    mime="text/csv",
+                )
+
+                # ── Adjust & Recalculate ──────────────────────────────────
+                st.divider()
+                with st.expander("🔧 Adjust Mix & Recalculate"):
+                    st.caption("Edit material quantities (kg/m³) and recalculate predicted strength and GWP.")
+                    adj_cols = st.columns(5)
+                    adj_mix: dict[str, float] = {}
+                    for i, feat in enumerate(RAW_FEATURES):
+                        with adj_cols[i % 5]:
+                            adj_mix[feat] = st.number_input(
+                                MATERIAL_LABELS.get(feat, feat).split(' ')[0],
+                                value=round(float(mix.get(feat, 0)), 2),
+                                min_value=0.0, step=1.0,
+                                key=f"adj_{feat}",
+                            )
+
+                    if st.button("🔄 Recalculate", key="recalc_btn"):
+                        st.session_state['adj_predicted'] = rec.predict_all(adj_mix)
+                        st.session_state['adj_gwp']       = compute_gwp(adj_mix)
+
+                    if 'adj_predicted' in st.session_state:
+                        ap = st.session_state['adj_predicted']
+                        ag = st.session_state['adj_gwp']
+                        r1, r2, r3, r4 = st.columns(4)
+                        r1.metric("7-Day", f"{ap['7day']*us:.1f} {sl}")
+                        r2.metric("28-Day", f"{ap['28day']*us:.1f} {sl}",
+                                  delta=f"{(ap['28day']-params['min_28d_mpa'])*us:+.1f} vs req.",
+                                  delta_color='normal' if ap['28day'] >= params['min_28d_mpa'] else 'inverse')
+                        r3.metric("56-Day", f"{(ap['56day'] or 0)*us:.1f} {sl}")
+                        r4.metric("GWP",    f"{ag:.1f} kg CO₂/m³",
+                                  delta=f"{ag - sol['gwp']:+.1f} vs selected",
+                                  delta_color='inverse')
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Tab 2 — Historical Similar Mixes
+    # ═══════════════════════════════════════════════════════════════════════
+    with tab2:
         if 'hist_result' not in st.session_state:
-            st.info("Set design parameters in the sidebar, then click **Get Recommendations**.")
+            st.info(
+                "Set parameters in the sidebar and click **🔍 Find Historical Mixes** "
+                "to retrieve similar mixes from the field dataset."
+            )
             with st.expander("📊 Dataset Overview"):
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Total Records", len(df))
-                c2.metric("28-Day Range",
-                           f"{df['28day'].min()*us:.0f}–{df['28day'].max()*us:.0f} {sl}")
-                c3.metric("w/cm Range",
-                           f"{df['w/b'].min():.2f}–{df['w/b'].max():.2f}")
-                fig_h = px.histogram(
-                    df['28day'].dropna() * us, nbins=30,
-                    labels={'value': f'28-Day Strength ({sl})', 'count': 'Count'},
-                    color_discrete_sequence=[NJDOT_BLUE],
+                c1.metric("Total Records",  len(df))
+                c2.metric("28-Day Range",   f"{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa")
+                c3.metric("GWP Range",      f"{df['GWP'].min():.0f}–{df['GWP'].max():.0f} kg CO₂/m³")
+                fig_h = go.Figure()
+                fig_h.add_trace(go.Histogram(
+                    x=df['GWP'].dropna(), name='GWP', nbinsx=30,
+                    marker_color=GREEN, opacity=0.75,
+                ))
+                fig_h.add_trace(go.Histogram(
+                    x=df['28day'].dropna() * (145.038 if unit_sys=='Imperial' else 1),
+                    name=f'28-Day ({sl})', nbinsx=30,
+                    marker_color=NJDOT_BLUE, opacity=0.75,
+                ))
+                fig_h.update_layout(
+                    barmode='overlay', height=250,
+                    legend=dict(orientation='h'),
+                    margin=dict(t=10, b=10),
+                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
                 )
-                fig_h.update_layout(height=230, showlegend=False,
-                                     margin=dict(t=10, b=10),
-                                     plot_bgcolor='rgba(0,0,0,0)',
-                                     paper_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(fig_h, use_container_width=True)
         else:
-            df_hist      = st.session_state['hist_result']
-            t28_mpa_disp = st.session_state['target_28_mpa']
+            df_hist   = st.session_state['hist_result']
+            t28_mpa   = st.session_state['hist_min_28d']
 
             st.subheader("Historical Similar Mixes (from field data)")
+
             if df_hist.empty:
                 st.warning(
-                    "No mixes satisfy all constraints. "
-                    "Try relaxing the strength target, w/cm, or binder limits."
+                    "No mixes satisfy all filters. "
+                    "Try raising GWP limit, lowering strength target, or relaxing w/cm."
                 )
             else:
                 st.info(
-                    f"Found **{len(df_hist)} mixes** with 28-day strength "
-                    f"≥ {t28_mpa_disp*us:.0f} {sl} and w/cm ≤ {max_wb}. "
-                    "Sorted by minimum over-design margin."
+                    f"Found **{len(df_hist)} mixes** with 28-day ≥ {t28_mpa*us:.0f} {sl}. "
+                    "Sorted by lowest GWP first."
                 )
 
-                # Build display DataFrame
-                rename = {
-                    'PC':'Cement','FA':'Fly Ash','SC':'Slag','SF':'Silica Fume',
-                    'FAGG':'Fine Agg.','CAGG':'Coarse Agg.','WATER':'Water',
-                    'AEA':'AEA','WR_HR':'HRWR','WR':'WR','ACC':'Acc.',
-                    'TOTAL_BINDER':'Total Cem.','w/b':'w/cm','SCM%':'SCM%',
-                    '7day':'7-Day','28day':'28-Day','56day':'56-Day',
-                }
                 df_disp = df_hist.copy()
-                # Apply unit conversion to mass columns
-                for col in MASS_FEATURES + ['TOTAL_BINDER']:
+                for col in [f for f in RAW_FEATURES if f not in ADMIX]:
                     if col in df_disp.columns:
                         df_disp[col] = (df_disp[col] * um).round(1)
-                # Apply unit conversion to strength columns
+                if 'TOTAL_BINDER' in df_disp.columns:
+                    df_disp['TOTAL_BINDER'] = (df_disp['TOTAL_BINDER'] * um).round(1)
                 for col in ['7day','28day','56day']:
                     if col in df_disp.columns:
                         df_disp[col] = (df_disp[col] * us).round(1)
+
+                rename = {
+                    'PC':'Cement','FA':'Fly Ash','SC':'Slag','FAGG':'Fine Agg.',
+                    'CAGG':'Coarse Agg.','WATER':'Water','AEA':'AEA',
+                    'WR_HR':'HRWR','WR':'WR','ACC':'Acc.',
+                    'TOTAL_BINDER':'Total Cem.','w/b':'w/cm','SCM%':'SCM%',
+                    'GWP':'GWP','7day':'7-Day','28day':'28-Day','56day':'56-Day',
+                }
                 df_disp = df_disp.rename(columns=rename)
                 df_disp.index = [f"Mix {i+1}" for i in range(len(df_disp))]
 
@@ -482,17 +623,18 @@ def main():
                             f"28-Day ({sl})",
                             min_value=0,
                             max_value=float(df['28day'].max() * us),
-                            format=f"%.1f {sl}",
+                            format=f"%.1f",
                         ),
-                        '7-Day':  st.column_config.NumberColumn(f"7-Day ({sl})",  format="%.1f"),
-                        '56-Day': st.column_config.NumberColumn(f"56-Day ({sl})", format="%.1f"),
-                        'w/cm':   st.column_config.NumberColumn("w/cm", format="%.3f"),
-                        'SCM%':   st.column_config.NumberColumn("SCM%", format="%.2f"),
+                        'GWP': st.column_config.ProgressColumn(
+                            "GWP (kg CO₂/m³)",
+                            min_value=0,
+                            max_value=float(df['GWP'].max()),
+                            format="%.0f",
+                        ),
                     },
                     use_container_width=True,
                 )
 
-                # Download
                 st.download_button(
                     "📥 Download CSV",
                     data=hist_csv(df_hist),
@@ -501,110 +643,28 @@ def main():
                 )
 
                 st.markdown("**Material Quantities**")
-                st.plotly_chart(chart_material_comparison(df_hist, um, ml), use_container_width=True)
-                st.markdown("**Compressive Strength by Age**")
-                st.plotly_chart(chart_strength_comparison(df_hist, t28_mpa_disp, us, sl),
+                st.plotly_chart(hist_material_chart(df_hist, um, ml),
                                 use_container_width=True)
 
-    # ── Tab 2 ───────────────────────────────────────────────────────────────
-    with tab2:
-        if 'opt_result' not in st.session_state:
-            st.info("Set design parameters in the sidebar, then click **Get Recommendations**.")
-        else:
-            result       = st.session_state['opt_result']
-            t28_mpa_disp = st.session_state['target_28_mpa']
-            mix          = result['mix']
-            predicted    = result['predicted']
-            tb           = result['total_binder']
-            wb           = result['wb_ratio']
-            scm_pct      = result['scm_pct']
-
-            st.subheader("Optimized New Mix Design")
-            st.caption(
-                "Differential evolution minimizes Portland cement content "
-                "while satisfying all strength and mix constraints."
-            )
-
-            if result['success']:
-                st.success("✅ Feasible mix found")
-            else:
-                st.warning("⚠️ Best feasible approximation — try relaxing constraints")
-
-            # Summary metrics
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Portland Cement",   f"{mix['PC']*um:.0f} {ml}")
-            m2.metric("Total Cementitious", f"{tb*um:.0f} {ml}")
-            m3.metric("w/cm Ratio",         f"{wb:.3f}" if wb else "—")
-            m4.metric("SCM Replacement",    f"{scm_pct*100:.1f}%")
-
-            st.divider()
-
-            col_a, col_b = st.columns([1, 1])
-            with col_a:
-                st.markdown(f"**Recommended Mix Proportions (per m³ / per yd³)**")
-                mix_df = pd.DataFrame([
-                    {
-                        'Material': MATERIAL_LABELS.get(k, k),
-                        f'Quantity': (
-                            f"{v*um:.1f} {ml}" if k not in ADMIX_FEATURES
-                            else f"{v:.1f} mL/100 kg"
-                        ),
-                    }
-                    for k, v in mix.items() if v > 0.5
-                ])
-                st.dataframe(mix_df, use_container_width=True, hide_index=True)
-
-                st.download_button(
-                    "📥 Download Mix Design CSV",
-                    data=opt_csv(mix, predicted, tb, wb, scm_pct),
-                    file_name="njdot_optimized_mix.csv",
-                    mime="text/csv",
+                # GWP vs Strength scatter for historical mixes
+                fig_sc = go.Figure()
+                fig_sc.add_trace(go.Scatter(
+                    x=df_hist['GWP'].tolist() if 'GWP' in df_hist.columns else [],
+                    y=(df_hist['28day'] * us).tolist() if '28day' in df_hist.columns else [],
+                    mode='markers+text',
+                    marker=dict(size=14, color=NJDOT_BLUE),
+                    text=[f"Mix {i+1}" for i in range(len(df_hist))],
+                    textposition='top center',
+                ))
+                fig_sc.update_layout(
+                    xaxis_title='GWP (kg CO₂-eq / m³)',
+                    yaxis_title=f'28-Day Strength ({sl})',
+                    height=280,
+                    margin=dict(t=10, b=10, l=0, r=0),
+                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
                 )
-
-            with col_b:
-                st.markdown("**Mix Composition**")
-                st.plotly_chart(chart_mix_pie(mix), use_container_width=True)
-
-            st.divider()
-            st.markdown("**Predicted Compressive Strength**")
-            st.plotly_chart(gauge_chart(predicted, t28_mpa_disp, us, sl),
-                            use_container_width=True)
-            st.plotly_chart(chart_strength_curve(predicted, t28_mpa_disp, us, sl),
-                            use_container_width=True)
-
-            # ── Adjust & Recalculate ─────────────────────────────────────
-            st.divider()
-            with st.expander("🔧 Adjust Mix & Recalculate Strength"):
-                st.caption(
-                    "Manually edit any material quantity to instantly see how "
-                    "predicted strength changes. Quantities are in metric (kg/m³)."
-                )
-                adj_cols = st.columns(4)
-                adj_mix: dict[str, float] = {}
-                for i, feat in enumerate(RAW_FEATURES):
-                    with adj_cols[i % 4]:
-                        adj_mix[feat] = st.number_input(
-                            MATERIAL_LABELS.get(feat, feat).split(' (')[0],
-                            value=round(float(mix[feat]), 1),
-                            min_value=0.0, step=1.0,
-                            key=f"adj_{feat}",
-                        )
-
-                if st.button("🔄 Recalculate Strength", key="recalc_btn"):
-                    st.session_state['adj_predicted'] = rec.predict_all(adj_mix)
-                    st.session_state['adj_mix'] = adj_mix
-
-                if 'adj_predicted' in st.session_state:
-                    adj_pred = st.session_state['adj_predicted']
-                    st.markdown("**Adjusted Predicted Strength:**")
-                    a1, a2, a3 = st.columns(3)
-                    a1.metric("7-Day",  f"{adj_pred['7day']*us:.1f} {sl}")
-                    a2.metric(
-                        "28-Day", f"{adj_pred['28day']*us:.1f} {sl}",
-                        delta=f"{(adj_pred['28day'] - t28_mpa_disp)*us:+.1f} {sl} vs target",
-                        delta_color="normal" if adj_pred['28day'] >= t28_mpa_disp else "inverse",
-                    )
-                    a3.metric("56-Day", f"{adj_pred['56day']*us:.1f} {sl}")
+                st.markdown("**GWP vs Strength Tradeoff**")
+                st.plotly_chart(fig_sc, use_container_width=True)
 
 
 if __name__ == '__main__':

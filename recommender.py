@@ -1,212 +1,342 @@
 from __future__ import annotations
 
+import warnings
 import numpy as np
 import pandas as pd
-from sklearn.neighbors import NearestNeighbors
-from scipy.optimize import differential_evolution, NonlinearConstraint
-import joblib
-import os
+from catboost import CatBoostRegressor
+from pymoo.algorithms.moo.nsga2 import NSGA2
+from pymoo.core.problem import Problem
+from pymoo.operators.crossover.sbx import SBX
+from pymoo.operators.mutation.pm import PM
+from pymoo.operators.sampling.rnd import FloatRandomSampling
+from pymoo.optimize import minimize as pymoo_minimize
 
-RAW_FEATURES = ['PC', 'FA', 'SC', 'SF', 'FAGG', 'CAGG', 'WATER', 'AEA', 'WR_HR', 'WR', 'ACC']
-DERIVED_FEATURES = ['TOTAL_BINDER', 'w/b', 'b/a', 'SCM%', 'CAGG%', 'FAGG%']
-ALL_FEATURES = RAW_FEATURES + DERIVED_FEATURES
+# ---------------------------------------------------------------------------
+# Feature layout (SF excluded from optimization)
+# ---------------------------------------------------------------------------
+RAW_FEATURES = ['PC', 'FA', 'SC', 'FAGG', 'CAGG', 'WATER', 'AEA', 'WR_HR', 'WR', 'ACC']
+
+BASE_DERIVED = [
+    'TOTAL_BINDER', 'w/b', 'b/a', 'SCM%', 'CAGG%', 'FAGG%',
+    'PC%', 'FA%', 'SC%', 'AEA_pct', 'WR_HR_pct', 'WR_pct', 'ACC_pct',
+]
+
+FEATURES_7D  = RAW_FEATURES + BASE_DERIVED                         # 23 features
+FEATURES_28D = RAW_FEATURES + BASE_DERIVED + ['7day']             # 24 features
+FEATURES_56D = RAW_FEATURES + BASE_DERIVED + ['7day', '28day']    # 25 features
+
 TARGETS = ['7day', '28day', '56day']
 
-# Dataset-derived bounds for optimizer
-RAW_BOUNDS = {
-    'PC':    (150, 850),
-    'FA':    (0,   273),
-    'SC':    (0,   560),
-    'SF':    (0,    68),
-    'FAGG':  (800, 1800),
-    'CAGG':  (700, 2300),
-    'WATER': (150,  360),
-    'AEA':   (0,    30),
-    'WR_HR': (0,   127),
-    'WR':    (0,   100),
-    'ACC':   (0,   768),
+# Layer 1 — raw ingredient bounds (kg/m³)
+BOUNDS_L1 = {
+    'PC':    (97.3,   504.3),
+    'FA':    (0.0,    162.0),
+    'SC':    (0.0,    332.2),
+    'FAGG':  (473.5,  1067.9),
+    'CAGG':  (400.5,  1364.6),
+    'WATER': (90.8,   214.8),
+    'AEA':   (0.0,    1.5),
+    'WR_HR': (0.0,    4.7),
+    'WR':    (0.0,    7.8),
+    'ACC':   (0.0,    28.5),
 }
 
+# GWP emission factors (kg CO₂-eq / kg material)
+GWP_COEF = {'PC': 1.048, 'FA': 0.328, 'SC': 0.264,
+             'CAGG': 0.0037, 'FAGG': 0.0026}
 
-def compute_derived_vector(x_raw: np.ndarray) -> np.ndarray:
-    """Compute derived engineering ratios from an 11-element raw feature vector."""
-    PC, FA, SC, SF, FAGG, CAGG, WATER = x_raw[:7]
-    total_binder = PC + FA + SC + SF
-    total_agg    = FAGG + CAGG
+# Material densities for volume calculation (kg/m³)
+_RHO = {'PC': 3150, 'FA': 2400, 'SC': 2900,
+        'FAGG': 2630, 'CAGG': 2710, 'WATER': 1000, 'AEA': 1000}
 
-    wb   = WATER / total_binder if total_binder > 0 else 0.0
-    ba   = total_binder / total_agg if total_agg > 0 else 0.0
-    scm  = (FA + SC + SF) / total_binder if total_binder > 0 else 0.0
-    cpct = CAGG / total_agg if total_agg > 0 else 0.0
-    fpct = FAGG / total_agg if total_agg > 0 else 0.0
+_FA_IDX  = RAW_FEATURES.index('FA')
+_SC_IDX  = RAW_FEATURES.index('SC')
+_AEA_IDX = RAW_FEATURES.index('AEA')
 
-    return np.concatenate([x_raw, [total_binder, wb, ba, scm, cpct, fpct]])
 
+# ---------------------------------------------------------------------------
+# Feature engineering helpers
+# ---------------------------------------------------------------------------
+
+def compute_derived_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy of df with all derived columns added / refreshed."""
+    df = df.copy()
+    binder = df['PC'] + df['FA'] + df['SC']
+    agg    = df['FAGG'] + df['CAGG']
+    sb = binder.replace(0, np.nan)
+    sa = agg.replace(0, np.nan)
+
+    df['TOTAL_BINDER'] = binder
+    df['w/b']          = df['WATER'] / sb
+    df['b/a']          = binder / sa
+    df['SCM%']         = (df['FA'] + df['SC']) / sb
+    df['CAGG%']        = df['CAGG'] / sa
+    df['FAGG%']        = df['FAGG'] / sa
+    df['PC%']          = df['PC']    / sb
+    df['FA%']          = df['FA']    / sb
+    df['SC%']          = df['SC']    / sb
+    df['AEA_pct']      = df['AEA']   / sb
+    df['WR_HR_pct']    = df['WR_HR'] / sb
+    df['WR_pct']       = df['WR']    / sb
+    df['ACC_pct']      = df['ACC']   / sb
+    return df
+
+
+def _derived_batch(X: np.ndarray) -> np.ndarray:
+    """
+    X shape: (n, 10) — RAW_FEATURES order.
+    Returns (n, 23) = raw + 13 derived columns.
+    """
+    PC=X[:,0]; FA=X[:,1]; SC=X[:,2]
+    FAGG=X[:,3]; CAGG=X[:,4]; WATER=X[:,5]
+    AEA=X[:,6]; WR_HR=X[:,7]; WR=X[:,8]; ACC=X[:,9]
+
+    binder = PC + FA + SC
+    agg    = FAGG + CAGG
+    sb = np.maximum(binder, 1e-9)
+    sa = np.maximum(agg,    1e-9)
+
+    derived = np.column_stack([
+        binder,         WATER/sb,      binder/sa,
+        (FA+SC)/sb,     CAGG/sa,       FAGG/sa,
+        PC/sb,          FA/sb,         SC/sb,
+        AEA/sb,         WR_HR/sb,      WR/sb,         ACC/sb,
+    ])
+    return np.hstack([X, derived])
+
+
+def compute_gwp(mix: dict) -> float:
+    return sum(mix.get(k, 0.0) * c for k, c in GWP_COEF.items())
+
+
+def _gwp_batch(X: np.ndarray) -> np.ndarray:
+    return (X[:,0]*1.048 + X[:,1]*0.328 + X[:,2]*0.264
+            + X[:,4]*0.0037 + X[:,3]*0.0026)
+    # indices: PC=0, FA=1, SC=2, FAGG=3, CAGG=4
+
+
+def _vfinal_batch(X: np.ndarray) -> np.ndarray:
+    PC=X[:,0]; FA=X[:,1]; SC=X[:,2]
+    FAGG=X[:,3]; CAGG=X[:,4]; WATER=X[:,5]; AEA=X[:,6]
+    vm = PC/3150 + FA/2400 + SC/2900 + FAGG/2630 + CAGG/2710 + WATER/1000 + AEA/1000
+    return vm + np.where(AEA > 0.001, 0.07, 0.03)
+
+
+# ---------------------------------------------------------------------------
+# NSGA-II problem definition
+# ---------------------------------------------------------------------------
+
+class _ConcreteProblem(Problem):
+    def __init__(self, rec: 'ConcreteRecommender',
+                 use_fa: bool, use_sc: bool,
+                 min_28d: float | None, max_gwp: float | None):
+        self.rec     = rec
+        self.min_28d = min_28d
+        self.max_gwp = max_gwp
+
+        xl = np.array([BOUNDS_L1[f][0] for f in RAW_FEATURES], dtype=float)
+        xu = np.array([BOUNDS_L1[f][1] for f in RAW_FEATURES], dtype=float)
+        if not use_fa:
+            xl[_FA_IDX] = xu[_FA_IDX] = 0.0
+        if not use_sc:
+            xl[_SC_IDX] = xu[_SC_IDX] = 0.0
+
+        n_constr = 30
+        if min_28d is not None: n_constr += 1
+        if max_gwp is not None: n_constr += 1
+
+        super().__init__(n_var=10, n_obj=2, n_ieq_constr=n_constr, xl=xl, xu=xu)
+
+    def _evaluate(self, X: np.ndarray, out: dict, *args, **kwargs):
+        PC=X[:,0]; FA=X[:,1]; SC=X[:,2]
+        FAGG=X[:,3]; CAGG=X[:,4]; WATER=X[:,5]
+        AEA=X[:,6]; WR_HR=X[:,7]; WR=X[:,8]; ACC=X[:,9]
+
+        binder = PC + FA + SC
+        agg    = FAGG + CAGG
+        sb = np.maximum(binder, 1e-9)
+        sa = np.maximum(agg,    1e-9)
+
+        wb       = WATER  / sb
+        ba       = binder / sa
+        scm_pct  = (FA+SC) / sb
+        cagg_pct = CAGG / sa
+        fagg_pct = FAGG / sa
+        pc_pct   = PC   / sb
+        fa_pct   = FA   / sb
+        sc_pct   = SC   / sb
+        aea_pct  = AEA   / sb
+        wrhr_pct = WR_HR / sb
+        wr_pct   = WR    / sb
+        acc_pct  = ACC   / sb
+
+        gwp     = _gwp_batch(X)
+        pred_28 = self.rec._predict_28d_batch(X)
+
+        out["F"] = np.column_stack([gwp, -pred_28])
+
+        vagg   = FAGG/2630 + CAGG/2710
+        vfinal = _vfinal_batch(X)
+
+        G = np.column_stack([
+            # Layer 2 — ratio constraints
+            0.235-wb,   wb-0.714,
+            0.105-ba,   ba-0.488,
+            -scm_pct,   scm_pct-0.765,
+            0.315-cagg_pct, cagg_pct-0.721,
+            0.279-fagg_pct, fagg_pct-0.685,
+            0.235-pc_pct,   pc_pct-1.0,
+            -fa_pct,    fa_pct-0.375,
+            -sc_pct,    sc_pct-0.717,
+            -aea_pct,   aea_pct-0.003,
+            -wrhr_pct,  wrhr_pct-0.012,
+            -wr_pct,    wr_pct-0.020,
+            -acc_pct,   acc_pct-0.061,
+            # Layer 3 — physics constraints
+            207.7-binder, binder-590.3,
+            0.553-vagg,   vagg-0.768,
+            0.950-vfinal, vfinal-1.050,
+        ])
+
+        if self.min_28d is not None:
+            G = np.column_stack([G, self.min_28d - pred_28])
+        if self.max_gwp is not None:
+            G = np.column_stack([G, gwp - self.max_gwp])
+
+        out["G"] = G
+
+
+# ---------------------------------------------------------------------------
+# Main recommender class
+# ---------------------------------------------------------------------------
 
 class ConcreteRecommender:
-    def __init__(self, df: pd.DataFrame, scaler, models: dict):
-        self.df = df.copy()
-        self.scaler = scaler
-        self.models = models  # {'7day': model, '28day': model, '56day': model}
-
-        # Build KNN index on scaled ALL_FEATURES space
-        X = self.df[ALL_FEATURES].fillna(0).values
-        X_scaled = self.scaler.transform(X)
-        self.knn = NearestNeighbors(n_neighbors=min(30, len(df)), metric='euclidean')
-        self.knn.fit(X_scaled)
-        self.X_scaled = X_scaled
+    def __init__(self, df: pd.DataFrame,
+                 model_7d:  CatBoostRegressor,
+                 model_28d: CatBoostRegressor,
+                 model_56d: CatBoostRegressor | None = None):
+        self.df       = df.copy()
+        self.model_7d  = model_7d
+        self.model_28d = model_28d
+        self.model_56d = model_56d
 
     # ------------------------------------------------------------------
-    # Prediction helpers
+    # Internal batch prediction helpers
     # ------------------------------------------------------------------
 
-    def _predict_raw(self, x_raw: np.ndarray, target: str) -> float:
-        """Predict from an 11-element raw feature vector."""
-        x_full = compute_derived_vector(x_raw)
-        x_scaled = self.scaler.transform(x_full.reshape(1, -1))
-        return float(self.models[target].predict(x_scaled)[0])
+    def _predict_7d_batch(self, X: np.ndarray) -> np.ndarray:
+        """X: (n, 10) raw features → (n,) 7-day predictions."""
+        return self.model_7d.predict(_derived_batch(X))
+
+    def _predict_28d_batch(self, X: np.ndarray) -> np.ndarray:
+        feat23 = _derived_batch(X)
+        pred7  = self._predict_7d_batch(X).reshape(-1, 1)
+        return self.model_28d.predict(np.hstack([feat23, pred7]))
+
+    # ------------------------------------------------------------------
+    # Public prediction
+    # ------------------------------------------------------------------
 
     def predict_all(self, mix: dict) -> dict:
-        """Predict all three strengths from a mix-design dict keyed by RAW_FEATURES."""
-        x_raw = np.array([mix.get(f, 0.0) for f in RAW_FEATURES])
-        return {t: self._predict_raw(x_raw, t) for t in TARGETS}
+        """Return {'7day': float, '28day': float, '56day': float|None}."""
+        x   = np.array([[mix.get(f, 0.0) for f in RAW_FEATURES]])
+        p7  = float(self._predict_7d_batch(x)[0])
+        f23 = _derived_batch(x)
+        p28 = float(self.model_28d.predict(np.hstack([f23, [[p7]]]))[0])
+        p56 = None
+        if self.model_56d is not None:
+            p56 = float(self.model_56d.predict(np.hstack([f23, [[p7]], [[p28]]]))[0])
+        return {'7day': p7, '28day': p28, '56day': p56}
 
     # ------------------------------------------------------------------
-    # Strategy 1 – Historical similar mixes
+    # NSGA-II Pareto search
+    # ------------------------------------------------------------------
+
+    def run_nsga2(
+        self,
+        use_fa: bool = True,
+        use_sc: bool = True,
+        min_28d: float | None = None,
+        max_gwp:  float | None = None,
+        pop_size: int = 100,
+        n_gen:    int = 100,
+        seed:     int = 42,
+    ) -> list[dict]:
+        """
+        Run NSGA-II minimizing GWP and maximizing 28-day strength.
+        Returns Pareto front as a list of solution dicts sorted by GWP.
+        """
+        problem = _ConcreteProblem(self, use_fa, use_sc, min_28d, max_gwp)
+
+        algorithm = NSGA2(
+            pop_size=pop_size,
+            sampling=FloatRandomSampling(),
+            crossover=SBX(prob=0.9, eta=15),
+            mutation=PM(eta=20),
+            eliminate_duplicates=True,
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            res = pymoo_minimize(
+                problem, algorithm,
+                ('n_gen', n_gen),
+                seed=seed, verbose=False,
+            )
+
+        if res.X is None:
+            return []
+
+        solutions = []
+        for i in range(len(res.X)):
+            x   = res.X[i]
+            mix = {f: float(x[j]) for j, f in enumerate(RAW_FEATURES)}
+            tb  = mix['PC'] + mix['FA'] + mix['SC']
+            wb  = mix['WATER'] / max(tb, 1e-9)
+            solutions.append({
+                'mix':         mix,
+                'gwp':         float(res.F[i, 0]),
+                'strength_28d': float(-res.F[i, 1]),
+                'predicted':   self.predict_all(mix),
+                'total_binder': tb,
+                'wb_ratio':    wb,
+                'scm_pct':     (mix['FA'] + mix['SC']) / max(tb, 1e-9),
+            })
+
+        solutions.sort(key=lambda s: s['gwp'])
+        return solutions
+
+    # ------------------------------------------------------------------
+    # Historical similar mixes
     # ------------------------------------------------------------------
 
     def recommend_historical(
         self,
-        target_28day: float,
-        use_fa: bool = True,
-        use_sc: bool = True,
-        use_sf: bool = False,
-        max_wb: float = 0.55,
-        max_binder: float = 700,
-        target_7day: float | None = None,
-        target_56day: float | None = None,
-        n_results: int = 5,
+        min_28d:  float = 30.0,
+        max_gwp:  float = 500.0,
+        use_fa:   bool  = True,
+        use_sc:   bool  = True,
+        max_wb:   float = 0.60,
+        n_results: int  = 5,
+        exclude_sf: bool = True,
     ) -> pd.DataFrame:
-        """Return top-N historical mixes satisfying all constraints."""
         df = self.df.copy()
-
-        df = df[df['28day'] >= target_28day]
-        if target_7day is not None:
-            df = df[df['7day'] >= target_7day]
-        if target_56day is not None:
-            # Only keep rows with a recorded 56-day result that meets the target
-            df = df[df['56day'] >= target_56day]
+        df = df[df['28day'] >= min_28d]
+        df = df[df['GWP']   <= max_gwp]
         if not use_fa:
             df = df[df['FA'] == 0]
         if not use_sc:
             df = df[df['SC'] == 0]
-        if not use_sf:
+        if 'w/b' in df.columns:
+            df = df[df['w/b'] <= max_wb]
+        if exclude_sf and 'SF' in df.columns:
             df = df[df['SF'] == 0]
-        df = df[df['w/b'] <= max_wb]
-        df = df[df['TOTAL_BINDER'] <= max_binder]
 
         if df.empty:
             return pd.DataFrame()
 
-        # Sort by minimum over-design (closest to target without going under)
-        df = df.copy()
-        df['_margin'] = df['28day'] - target_28day
-        df = df.sort_values('_margin').head(n_results).drop(columns='_margin')
-
-        keep = RAW_FEATURES + ['TOTAL_BINDER', 'w/b', 'SCM%', '7day', '28day', '56day']
-        result = df[keep].reset_index(drop=True)
-        # Force numeric dtype — pandas version differences can leave object columns
-        result = result.apply(pd.to_numeric, errors='coerce')
-        return result.round(2)
-
-    # ------------------------------------------------------------------
-    # Strategy 2 – Optimized new mix (differential evolution)
-    # ------------------------------------------------------------------
-
-    def recommend_optimized(
-        self,
-        target_28day: float,
-        use_fa: bool = True,
-        use_sc: bool = True,
-        use_sf: bool = False,
-        max_wb: float = 0.55,
-        target_7day: float | None = None,
-        target_56day: float | None = None,
-        min_binder: float = 300,
-        max_binder: float = 700,
-        maxiter: int = 200,
-        seed: int = 42,
-    ) -> dict:
-        """Use differential evolution to find an optimal new mix design."""
-
-        eps = 0.01
-        bounds = []
-        for f in RAW_FEATURES:
-            lo, hi = RAW_BOUNDS[f]
-            if f == 'FA' and not use_fa:
-                bounds.append((0, eps))
-            elif f == 'SC' and not use_sc:
-                bounds.append((0, eps))
-            elif f == 'SF' and not use_sf:
-                bounds.append((0, eps))
-            else:
-                bounds.append((lo, hi))
-
-        def _total_binder(x):
-            return x[0] + x[1] + x[2] + x[3]
-
-        def _wb(x):
-            tb = _total_binder(x)
-            return x[6] / tb if tb > 1 else 99.0
-
-        # Objective: minimize Portland cement content (cost & CO₂ proxy)
-        def objective(x):
-            return x[0]
-
-        constraints = [
-            NonlinearConstraint(lambda x: self._predict_raw(np.array(x), '28day'),
-                                target_28day, np.inf),
-            NonlinearConstraint(_wb, 0.28, max_wb),
-            NonlinearConstraint(_total_binder, min_binder, max_binder),
-        ]
-        if target_7day is not None:
-            constraints.append(
-                NonlinearConstraint(lambda x: self._predict_raw(np.array(x), '7day'),
-                                    target_7day, np.inf)
-            )
-        if target_56day is not None:
-            constraints.append(
-                NonlinearConstraint(lambda x: self._predict_raw(np.array(x), '56day'),
-                                    target_56day, np.inf)
-            )
-
-        result = differential_evolution(
-            objective,
-            bounds,
-            constraints=constraints,
-            seed=seed,
-            maxiter=maxiter,
-            popsize=12,
-            tol=1.0,
-            mutation=(0.5, 1.0),
-            recombination=0.7,
-            workers=1,
-            polish=False,  # tree model gradients are discontinuous; skip L-BFGS polish
-        )
-
-        x = result.x
-        mix = {f: float(x[i]) for i, f in enumerate(RAW_FEATURES)}
-        total_binder = sum(mix[f] for f in ['PC', 'FA', 'SC', 'SF'])
-        wb   = mix['WATER'] / total_binder if total_binder > 0 else None
-        scm  = (mix['FA'] + mix['SC'] + mix['SF']) / total_binder if total_binder > 0 else 0
-        predicted = self.predict_all(mix)
-
-        return {
-            'success': result.success or predicted['28day'] >= target_28day * 0.98,
-            'mix': mix,
-            'predicted': predicted,
-            'total_binder': total_binder,
-            'wb_ratio': wb,
-            'scm_pct': scm,
-            'message': result.message,
-        }
+        df = df.sort_values(['GWP', '28day'], ascending=[True, False])
+        keep = RAW_FEATURES + ['TOTAL_BINDER', 'w/b', 'SCM%', 'GWP', '7day', '28day', '56day']
+        keep = [c for c in keep if c in df.columns]
+        result = df[keep].head(n_results).reset_index(drop=True)
+        return result.apply(pd.to_numeric, errors='coerce').round(3)

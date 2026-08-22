@@ -10,5 +10,8 @@ venv/
 # Claude Code internal directory
 .claude/
 
-# Pre-trained models (pkl files are Python-version-specific; app retrains on startup)
+# CatBoost training logs
+catboost_info/
+
+# Pre-trained models (CatBoost .cbm files are version-specific; app retrains on startup)
 models/
