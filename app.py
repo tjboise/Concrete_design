@@ -413,14 +413,13 @@ def main():
         n_hist = st.slider("n_hist", 3, 10, 5, label_visibility="collapsed")
 
         st.markdown("---")
-        run_pareto = st.button("🚀 Run Pareto Search",    type="primary", use_container_width=True)
-        run_hist   = st.button("🔍 Find Historical Mixes", use_container_width=True)
+        run_all = st.button("▶ Run", type="primary", use_container_width=True)
 
     # -----------------------------------------------------------------------
     # Run computations → session state
     # -----------------------------------------------------------------------
-    if run_pareto:
-        with st.spinner("Running NSGA-II…"):
+    if run_all:
+        with st.spinner("Running…"):
             try:
                 solutions = rec.run_nsga2(
                     use_fa=use_fa, use_sc=use_sc,
@@ -439,7 +438,6 @@ def main():
         }
         st.session_state.pop('adj_predicted', None)
 
-    if run_hist:
         df_hist = rec.recommend_historical(
             min_28d=min_28d_mpa, max_gwp=max_gwp_val,
             use_fa=use_fa, use_sc=use_sc,
