@@ -427,12 +427,18 @@ def main():
     # -----------------------------------------------------------------------
     if run_pareto:
         with st.spinner("Running NSGA-II…"):
-            solutions = rec.run_nsga2(
-                use_fa=use_fa, use_sc=use_sc,
-                min_7d=min_7d_mpa, min_28d=min_28d_mpa,
-                min_56d=min_56d_mpa, max_gwp=max_gwp_val,
-                pop_size=100, n_gen=100,
-            )
+            try:
+                solutions = rec.run_nsga2(
+                    use_fa=use_fa, use_sc=use_sc,
+                    min_7d=min_7d_mpa, min_28d=min_28d_mpa,
+                    min_56d=min_56d_mpa, max_gwp=max_gwp_val,
+                    pop_size=100, n_gen=100,
+                )
+            except Exception as _e:
+                st.error(f"NSGA-II error ({type(_e).__name__}): {_e}")
+                import traceback
+                st.code(traceback.format_exc())
+                st.stop()
         st.session_state['pareto_solutions'] = solutions
         st.session_state['pareto_params']    = {
             'min_28d_mpa': min_28d_mpa, 'max_gwp': max_gwp_val,
