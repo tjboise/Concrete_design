@@ -361,8 +361,6 @@ def main():
     with st.spinner("Loading models… (first run trains CatBoost Chain, ~30–60 s)"):
         df, rec = load_or_train()
 
-    st.success("✅ Models ready")
-
     # -----------------------------------------------------------------------
     # Sidebar
     # -----------------------------------------------------------------------
