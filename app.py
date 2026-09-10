@@ -408,7 +408,7 @@ def main():
 
         st.markdown("---")
         st.markdown("**Historical Mixes to Show**")
-        n_hist = st.slider("n_hist", 3, 10, 5, label_visibility="collapsed")
+        n_hist = st.slider("n_hist", 3, 10, 3, label_visibility="collapsed")
 
         st.markdown("---")
         run_all = st.button("▶ Run", type="primary", use_container_width=True)
