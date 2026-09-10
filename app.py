@@ -315,6 +315,42 @@ def hist_csv(df_hist: pd.DataFrame) -> str:
 # ---------------------------------------------------------------------------
 
 def main():
+    # Inject CSS to tighten sidebar padding
+    st.markdown("""
+<style>
+/* Reduce sidebar top/bottom padding */
+[data-testid="stSidebarUserContent"] {
+    padding-top: 1rem;
+    padding-bottom: 0.5rem;
+}
+/* Tighten spacing between every widget block */
+[data-testid="stSidebarUserContent"] [data-testid="stVerticalBlock"] > div {
+    gap: 0.25rem;
+}
+/* Shrink slider label + widget gap */
+[data-testid="stSidebarUserContent"] .stSlider {
+    padding-top: 0;
+    padding-bottom: 0.1rem;
+}
+/* Shrink checkbox rows */
+[data-testid="stSidebarUserContent"] .stCheckbox {
+    margin-bottom: 0;
+}
+/* Shrink radio button row */
+[data-testid="stSidebarUserContent"] .stRadio {
+    margin-bottom: 0.25rem;
+}
+/* Tighten markdown paragraphs in sidebar */
+[data-testid="stSidebarUserContent"] .stMarkdown p {
+    margin-bottom: 0.15rem;
+}
+/* Shrink horizontal rule */
+[data-testid="stSidebarUserContent"] hr {
+    margin: 0.4rem 0;
+}
+</style>
+""", unsafe_allow_html=True)
+
     st.markdown(
         f"<h2 style='color:{NJDOT_BLUE};margin-bottom:0'>🏗️ Concrete Mix Design Advisor</h2>",
         unsafe_allow_html=True,
