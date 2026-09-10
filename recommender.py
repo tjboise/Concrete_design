@@ -129,9 +129,12 @@ def _vfinal_batch(X: np.ndarray) -> np.ndarray:
 class _ConcreteProblem(Problem):
     def __init__(self, rec: 'ConcreteRecommender',
                  use_fa: bool, use_sc: bool,
-                 min_28d: float | None, max_gwp: float | None):
+                 min_7d:  float | None, min_28d: float | None,
+                 min_56d: float | None, max_gwp:  float | None):
         self.rec     = rec
+        self.min_7d  = min_7d
         self.min_28d = min_28d
+        self.min_56d = min_56d if (min_56d is not None and rec.model_56d is not None) else None
         self.max_gwp = max_gwp
 
         xl = np.array([BOUNDS_L1[f][0] for f in RAW_FEATURES], dtype=float)
@@ -142,7 +145,9 @@ class _ConcreteProblem(Problem):
             xl[_SC_IDX] = xu[_SC_IDX] = 0.0
 
         n_constr = 30
+        if min_7d  is not None: n_constr += 1
         if min_28d is not None: n_constr += 1
+        if self.min_56d is not None: n_constr += 1
         if max_gwp is not None: n_constr += 1
 
         super().__init__(n_var=10, n_obj=2, n_ieq_constr=n_constr, xl=xl, xu=xu)
@@ -170,8 +175,11 @@ class _ConcreteProblem(Problem):
         wr_pct   = WR    / sb
         acc_pct  = ACC   / sb
 
-        gwp     = _gwp_batch(X)
-        pred_28 = self.rec._predict_28d_batch(X)
+        gwp    = _gwp_batch(X)
+        feat23 = _derived_batch(X)
+        pred_7 = self.rec._predict_7d_batch(X)
+        feat24 = np.hstack([feat23, pred_7.reshape(-1, 1)])
+        pred_28 = self.rec.model_28d.predict(feat24)
 
         out["F"] = np.column_stack([gwp, -pred_28])
 
@@ -198,8 +206,15 @@ class _ConcreteProblem(Problem):
             0.950-vfinal, vfinal-1.050,
         ])
 
+        if self.min_7d is not None:
+            G = np.column_stack([G, self.min_7d - pred_7])
         if self.min_28d is not None:
             G = np.column_stack([G, self.min_28d - pred_28])
+        if self.min_56d is not None:
+            pred_56 = self.rec.model_56d.predict(
+                np.hstack([feat24, pred_28.reshape(-1, 1)])
+            )
+            G = np.column_stack([G, self.min_56d - pred_56])
         if self.max_gwp is not None:
             G = np.column_stack([G, gwp - self.max_gwp])
 
@@ -254,10 +269,12 @@ class ConcreteRecommender:
 
     def run_nsga2(
         self,
-        use_fa: bool = True,
-        use_sc: bool = True,
+        use_fa:  bool = True,
+        use_sc:  bool = True,
+        min_7d:  float | None = None,
         min_28d: float | None = None,
-        max_gwp:  float | None = None,
+        min_56d: float | None = None,
+        max_gwp: float | None = None,
         pop_size: int = 100,
         n_gen:    int = 100,
         seed:     int = 42,
@@ -266,7 +283,7 @@ class ConcreteRecommender:
         Run NSGA-II minimizing GWP and maximizing 28-day strength.
         Returns Pareto front as a list of solution dicts sorted by GWP.
         """
-        problem = _ConcreteProblem(self, use_fa, use_sc, min_28d, max_gwp)
+        problem = _ConcreteProblem(self, use_fa, use_sc, min_7d, min_28d, min_56d, max_gwp)
 
         algorithm = NSGA2(
             pop_size=pop_size,

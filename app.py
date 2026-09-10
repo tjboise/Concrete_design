@@ -380,13 +380,30 @@ def main():
         sl = UNIT_SL[unit_sys]; ml = UNIT_ML[unit_sys]
 
         st.markdown("---")
-        st.markdown("**Objectives & Constraints**")
+        st.markdown("**Strength Constraints**")
+
+        en_7d = st.checkbox("Set min 7-Day strength", value=False)
+        min_7d_mpa = None
+        if en_7d:
+            if unit_sys == 'Metric':
+                min_7d_mpa = float(st.slider("Min 7-Day (MPa)", 5, 50, 20, step=1))
+            else:
+                min_7d_mpa = st.slider("Min 7-Day (psi)", 700, 7000, 2900, step=100) / 145.038
+
         if unit_sys == 'Metric':
-            min_28d_val = st.slider("Min 28-Day Strength (MPa)", 20, 80, 30, step=1)
-            min_28d_mpa = float(min_28d_val)
+            min_28d_mpa = float(st.slider("Min 28-Day (MPa)", 20, 80, 30, step=1))
         else:
-            min_28d_val = st.slider("Min 28-Day Strength (psi)", 2900, 11600, 4350, step=100)
-            min_28d_mpa = min_28d_val / 145.038
+            min_28d_mpa = st.slider("Min 28-Day (psi)", 2900, 11600, 4350, step=100) / 145.038
+
+        en_56d = st.checkbox("Set min 56-Day strength", value=False)
+        min_56d_mpa = None
+        if en_56d:
+            if unit_sys == 'Metric':
+                min_56d_mpa = float(st.slider("Min 56-Day (MPa)", 20, 90, 40, step=1))
+            else:
+                min_56d_mpa = st.slider("Min 56-Day (psi)", 2900, 13000, 5800, step=100) / 145.038
+
+        st.markdown("**GWP Constraint**")
         max_gwp_val = st.slider("Max GWP (kg CO₂-eq/m³)", 150, 550, 500, step=10)
 
         st.markdown("**Available SCMs**")
@@ -409,7 +426,8 @@ def main():
         with st.spinner("Running NSGA-II…"):
             solutions = rec.run_nsga2(
                 use_fa=use_fa, use_sc=use_sc,
-                min_28d=min_28d_mpa, max_gwp=max_gwp_val,
+                min_7d=min_7d_mpa, min_28d=min_28d_mpa,
+                min_56d=min_56d_mpa, max_gwp=max_gwp_val,
                 pop_size=100, n_gen=100,
             )
         st.session_state['pareto_solutions'] = solutions
