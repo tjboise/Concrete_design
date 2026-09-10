@@ -355,10 +355,7 @@ def main():
         f"<h2 style='color:{NJDOT_BLUE};margin-bottom:0'>🏗️ Concrete Mix Design Advisor</h2>",
         unsafe_allow_html=True,
     )
-    st.caption(
-        "**NJDOT — New Jersey Department of Transportation** | "
-        "667 field records · CatBoost-Chain surrogate · NSGA-II Pareto optimization"
-    )
+    st.caption("**NJDOT — New Jersey Department of Transportation**")
     st.divider()
 
     with st.spinner("Loading models… (first run trains CatBoost Chain, ~30–60 s)"):
