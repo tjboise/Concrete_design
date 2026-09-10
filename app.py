@@ -348,18 +348,22 @@ def main():
 [data-testid="stSidebarUserContent"] hr {
     margin: 0.4rem 0;
 }
-/* Circular Run button */
-[data-testid="stSidebarUserContent"] .stButton {
-    display: flex;
-    justify-content: center;
+/* Circular Run button — centred */
+[data-testid="stSidebarUserContent"] .stButton,
+[data-testid="stSidebarUserContent"] .stButton > div {
+    display: flex !important;
+    justify-content: center !important;
+    align-items: center !important;
 }
 [data-testid="stSidebarUserContent"] .stButton button {
     width: 72px !important;
     height: 72px !important;
+    min-width: unset !important;
     border-radius: 50% !important;
     padding: 0 !important;
     font-size: 1rem;
     font-weight: 600;
+    margin: 0 auto;
 }
 </style>
 """, unsafe_allow_html=True)
