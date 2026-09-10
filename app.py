@@ -390,10 +390,13 @@ def main():
             else:
                 min_7d_mpa = st.slider("Min 7-Day (psi)", 700, 7000, 2900, step=100) / 145.038
 
-        if unit_sys == 'Metric':
-            min_28d_mpa = float(st.slider("Min 28-Day (MPa)", 20, 80, 30, step=1))
-        else:
-            min_28d_mpa = st.slider("Min 28-Day (psi)", 2900, 11600, 4350, step=100) / 145.038
+        en_28d = st.checkbox("Set min 28-Day strength", value=True)
+        min_28d_mpa = None
+        if en_28d:
+            if unit_sys == 'Metric':
+                min_28d_mpa = float(st.slider("Min 28-Day (MPa)", 20, 80, 30, step=1))
+            else:
+                min_28d_mpa = st.slider("Min 28-Day (psi)", 2900, 11600, 4350, step=100) / 145.038
 
         en_56d = st.checkbox("Set min 56-Day strength", value=False)
         min_56d_mpa = None
@@ -491,8 +494,11 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                           f"{solutions[0]['gwp']:.0f}–{solutions[-1]['gwp']:.0f} kg CO₂/m³")
                 c3.metric("Strength Range",
                           f"{solutions[0]['strength_28d']*us:.0f}–{solutions[-1]['strength_28d']*us:.0f} {sl}")
-                c4.metric("Min 28-Day Constraint",
-                          f"{params['min_28d_mpa']*us:.0f} {sl}")
+                if params['min_28d_mpa'] is not None:
+                    c4.metric("Min 28-Day Constraint",
+                              f"{params['min_28d_mpa']*us:.0f} {sl}")
+                else:
+                    c4.metric("Min 28-Day Constraint", "—")
 
                 st.divider()
 
@@ -588,9 +594,12 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                         ag = st.session_state['adj_gwp']
                         r1, r2, r3, r4 = st.columns(4)
                         r1.metric("7-Day", f"{ap['7day']*us:.1f} {sl}")
-                        r2.metric("28-Day", f"{ap['28day']*us:.1f} {sl}",
-                                  delta=f"{(ap['28day']-params['min_28d_mpa'])*us:+.1f} vs req.",
-                                  delta_color='normal' if ap['28day'] >= params['min_28d_mpa'] else 'inverse')
+                        if params['min_28d_mpa'] is not None:
+                            r2.metric("28-Day", f"{ap['28day']*us:.1f} {sl}",
+                                      delta=f"{(ap['28day']-params['min_28d_mpa'])*us:+.1f} vs req.",
+                                      delta_color='normal' if ap['28day'] >= params['min_28d_mpa'] else 'inverse')
+                        else:
+                            r2.metric("28-Day", f"{ap['28day']*us:.1f} {sl}")
                         r3.metric("56-Day", f"{(ap['56day'] or 0)*us:.1f} {sl}")
                         r4.metric("GWP",    f"{ag:.1f} kg CO₂/m³",
                                   delta=f"{ag - sol['gwp']:+.1f} vs selected",

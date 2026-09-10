@@ -329,16 +329,18 @@ class ConcreteRecommender:
 
     def recommend_historical(
         self,
-        min_28d:  float = 30.0,
-        max_gwp:  float = 500.0,
+        min_28d:  float | None = 30.0,
+        max_gwp:  float | None = 500.0,
         use_fa:   bool  = True,
         use_sc:   bool  = True,
         n_results: int  = 5,
         exclude_sf: bool = True,
     ) -> pd.DataFrame:
         df = self.df.copy()
-        df = df[df['28day'] >= min_28d]
-        df = df[df['GWP']   <= max_gwp]
+        if min_28d is not None:
+            df = df[df['28day'] >= min_28d]
+        if max_gwp is not None:
+            df = df[df['GWP'] <= max_gwp]
         if not use_fa:
             df = df[df['FA'] == 0]
         if not use_sc:
