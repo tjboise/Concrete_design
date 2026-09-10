@@ -655,8 +655,7 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                 )
             else:
                 st.info(
-                    f"Found **{len(df_hist)} mixes** with 28-day ≥ {t28_mpa*us:.0f} {sl}. "
-                    "Sorted by lowest GWP first."
+                    f"Found **{len(df_hist)} mixes**. Sorted by lowest GWP first."
                 )
 
                 df_disp = df_hist.copy()
