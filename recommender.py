@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+__version__ = "2.0.0"  # min_7d / min_56d constraints
+
 import warnings
 import numpy as np
 import pandas as pd
