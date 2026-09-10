@@ -337,32 +337,32 @@ def main():
     # Sidebar
     # -----------------------------------------------------------------------
     with st.sidebar:
-        st.header("Design Parameters")
-
-        unit_sys = st.radio("Unit System", ["Metric", "Imperial"], horizontal=True)
+        st.markdown("**Unit System**")
+        unit_sys = st.radio("Unit System", ["Metric", "Imperial"],
+                            horizontal=True, label_visibility="collapsed")
         us = UNIT_S[unit_sys]; um = UNIT_M[unit_sys]
         sl = UNIT_SL[unit_sys]; ml = UNIT_ML[unit_sys]
-        st.divider()
 
-        st.subheader("Objectives & Constraints")
+        st.markdown("---")
+        st.markdown("**Objectives & Constraints**")
         if unit_sys == 'Metric':
             min_28d_val = st.slider("Min 28-Day Strength (MPa)", 20, 80, 30, step=1)
             min_28d_mpa = float(min_28d_val)
-            max_gwp_val = st.slider("Max GWP (kg CO₂-eq/m³)", 150, 550, 500, step=10)
         else:
             min_28d_val = st.slider("Min 28-Day Strength (psi)", 2900, 11600, 4350, step=100)
             min_28d_mpa = min_28d_val / 145.038
-            max_gwp_val = st.slider("Max GWP (kg CO₂-eq/m³)", 150, 550, 500, step=10)
+        max_gwp_val = st.slider("Max GWP (kg CO₂-eq/m³)", 150, 550, 500, step=10)
 
-        st.subheader("Available SCMs")
-        use_fa = st.checkbox("Fly Ash (FA)", value=True)
-        use_sc = st.checkbox("Slag Cement (SC)", value=True)
-        st.divider()
+        st.markdown("**Available SCMs**")
+        scm_c1, scm_c2 = st.columns(2)
+        use_fa = scm_c1.checkbox("Fly Ash", value=True)
+        use_sc = scm_c2.checkbox("Slag Cement", value=True)
 
-        st.subheader("Historical Filter")
-        n_hist = st.slider("Historical mixes to show", 3, 10, 5)
-        st.divider()
+        st.markdown("---")
+        st.markdown("**Historical Mixes to Show**")
+        n_hist = st.slider("n_hist", 3, 10, 5, label_visibility="collapsed")
 
+        st.markdown("---")
         run_pareto = st.button("🚀 Run Pareto Search",    type="primary", use_container_width=True)
         run_hist   = st.button("🔍 Find Historical Mixes", use_container_width=True)
 
