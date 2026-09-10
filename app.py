@@ -359,14 +359,8 @@ def main():
         use_sc = st.checkbox("Slag Cement (SC)", value=True)
         st.divider()
 
-        st.subheader("NSGA-II Settings")
-        pop_size = st.select_slider("Population Size", [50, 100, 200], value=100)
-        n_gen    = st.select_slider("Generations",     [50, 100, 200], value=100)
-        st.divider()
-
         st.subheader("Historical Filter")
-        max_wb_hist = st.slider("Max w/cm (historical)", 0.30, 0.72, 0.60, step=0.01)
-        n_hist      = st.slider("Historical mixes to show", 3, 10, 5)
+        n_hist = st.slider("Historical mixes to show", 3, 10, 5)
         st.divider()
 
         run_pareto = st.button("🚀 Run Pareto Search",    type="primary", use_container_width=True)
@@ -376,11 +370,11 @@ def main():
     # Run computations → session state
     # -----------------------------------------------------------------------
     if run_pareto:
-        with st.spinner(f"Running NSGA-II (pop={pop_size}, gen={n_gen})…"):
+        with st.spinner("Running NSGA-II…"):
             solutions = rec.run_nsga2(
                 use_fa=use_fa, use_sc=use_sc,
                 min_28d=min_28d_mpa, max_gwp=max_gwp_val,
-                pop_size=pop_size, n_gen=n_gen,
+                pop_size=100, n_gen=100,
             )
         st.session_state['pareto_solutions'] = solutions
         st.session_state['pareto_params']    = {
@@ -392,7 +386,7 @@ def main():
         df_hist = rec.recommend_historical(
             min_28d=min_28d_mpa, max_gwp=max_gwp_val,
             use_fa=use_fa, use_sc=use_sc,
-            max_wb=max_wb_hist, n_results=n_hist,
+            n_results=n_hist,
         )
         st.session_state['hist_result']    = df_hist
         st.session_state['hist_min_28d']   = min_28d_mpa

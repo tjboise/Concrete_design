@@ -316,7 +316,6 @@ class ConcreteRecommender:
         max_gwp:  float = 500.0,
         use_fa:   bool  = True,
         use_sc:   bool  = True,
-        max_wb:   float = 0.60,
         n_results: int  = 5,
         exclude_sf: bool = True,
     ) -> pd.DataFrame:
@@ -327,8 +326,6 @@ class ConcreteRecommender:
             df = df[df['FA'] == 0]
         if not use_sc:
             df = df[df['SC'] == 0]
-        if 'w/b' in df.columns:
-            df = df[df['w/b'] <= max_wb]
         if exclude_sf and 'SF' in df.columns:
             df = df[df['SF'] == 0]
 
