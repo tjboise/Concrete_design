@@ -494,20 +494,6 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                 n_sol = len(solutions)
                 params = st.session_state['pareto_params']
 
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Pareto Solutions", n_sol)
-                c2.metric("GWP Range",
-                          f"{solutions[0]['gwp']:.0f}–{solutions[-1]['gwp']:.0f} kg CO₂/m³")
-                c3.metric("Strength Range",
-                          f"{solutions[0]['strength_28d']*us:.0f}–{solutions[-1]['strength_28d']*us:.0f} {sl}")
-                if params['min_28d_mpa'] is not None:
-                    c4.metric("Min 28-Day Constraint",
-                              f"{params['min_28d_mpa']*us:.0f} {sl}")
-                else:
-                    c4.metric("Min 28-Day Constraint", "—")
-
-                st.divider()
-
                 # ── Preference slider ─────────────────────────────────────
                 st.markdown("**Select Your Preferred Solution**")
                 pref = st.slider(
@@ -585,9 +571,6 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                     if st.button("🔄 Recalculate", key="recalc_btn"):
                         st.session_state['adj_predicted'] = rec.predict_all(current_mix)
                         st.session_state['adj_gwp']       = compute_gwp(current_mix)
-
-                    st.markdown("**GWP Breakdown**")
-                    st.plotly_chart(gwp_breakdown_chart(current_mix), use_container_width=True)
 
                 with col_b:
                     st.markdown("**Predicted Strength & GWP**")
