@@ -529,15 +529,19 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                 w = pref / 100
                 scores = (1 - w) * (strs - s_min) / s_rng - w * (gwps - g_min) / g_rng
                 sel = int(np.argmax(scores))
-
-                # Pareto chart
-                st.plotly_chart(pareto_chart(solutions, sel, us, sl),
-                                use_container_width=True)
-
-                st.divider()
                 sol = solutions[sel]
                 mix = sol['mix']
 
+                # Pareto chart + Mix Composition side by side
+                pc1, pc2 = st.columns([3, 2])
+                with pc1:
+                    st.plotly_chart(pareto_chart(solutions, sel, us, sl),
+                                    use_container_width=True)
+                with pc2:
+                    st.markdown("**Mix Composition**")
+                    st.plotly_chart(mix_pie_chart(mix), use_container_width=True)
+
+                st.divider()
                 st.subheader(f"Selected Mix — Solution #{sel+1}")
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("GWP", f"{sol['gwp']:.1f} kg CO₂/m³")
@@ -553,10 +557,13 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
 
                 col_a, col_b = st.columns([1, 1])
                 with col_a:
-                    st.markdown("**Mix Proportions** — edit & recalculate")
+                    st.markdown("**Mix Proportions** — edit Adjusted column & recalculate")
                     mix_df_edit = pd.DataFrame([
-                        {'Material': MATERIAL_LABELS.get(k, k),
-                         f'Qty ({ml})': round(float(mix.get(k, 0)) * um, 2)}
+                        {
+                            'Material': MATERIAL_LABELS.get(k, k),
+                            f'Original ({ml})': round(float(mix.get(k, 0)) * um, 2),
+                            f'Adjusted ({ml})': round(float(mix.get(k, 0)) * um, 2),
+                        }
                         for k in RAW_FEATURES
                     ])
                     edited_df = st.data_editor(
@@ -565,42 +572,50 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                         use_container_width=True,
                         column_config={
                             'Material': st.column_config.TextColumn(disabled=True),
-                            f'Qty ({ml})': st.column_config.NumberColumn(
+                            f'Original ({ml})': st.column_config.NumberColumn(disabled=True),
+                            f'Adjusted ({ml})': st.column_config.NumberColumn(
                                 min_value=0.0, step=1.0),
                         },
                         key=f"mix_editor_{sel}",
                     )
                     current_mix = {
-                        feat: float(edited_df.iloc[i][f'Qty ({ml})']) / um
+                        feat: float(edited_df.iloc[i][f'Adjusted ({ml})']) / um
                         for i, feat in enumerate(RAW_FEATURES)
                     }
-
                     if st.button("🔄 Recalculate", key="recalc_btn"):
                         st.session_state['adj_predicted'] = rec.predict_all(current_mix)
                         st.session_state['adj_gwp']       = compute_gwp(current_mix)
-
-                    pred     = st.session_state.get('adj_predicted', sol['predicted'])
-                    gwp_show = st.session_state.get('adj_gwp', sol['gwp'])
-                    st.markdown("**Predicted Strength & GWP**")
-                    r1, r2, r3, r4 = st.columns(4)
-                    r1.metric("7-Day",  f"{pred['7day']*us:.1f} {sl}")
-                    if params['min_28d_mpa'] is not None:
-                        r2.metric("28-Day", f"{pred['28day']*us:.1f} {sl}",
-                                  delta=f"{(pred['28day']-params['min_28d_mpa'])*us:+.1f} vs req.",
-                                  delta_color='normal' if pred['28day'] >= params['min_28d_mpa'] else 'inverse')
-                    else:
-                        r2.metric("28-Day", f"{pred['28day']*us:.1f} {sl}")
-                    r3.metric("56-Day", f"{(pred['56day'] or 0)*us:.1f} {sl}")
-                    r4.metric("GWP", f"{gwp_show:.1f} kg CO₂/m³",
-                              delta=f"{gwp_show - sol['gwp']:+.1f} vs selected" if 'adj_gwp' in st.session_state else None,
-                              delta_color='inverse')
 
                     st.markdown("**GWP Breakdown**")
                     st.plotly_chart(gwp_breakdown_chart(current_mix), use_container_width=True)
 
                 with col_b:
-                    st.markdown("**Mix Composition**")
-                    st.plotly_chart(mix_pie_chart(current_mix), use_container_width=True)
+                    st.markdown("**Predicted Strength & GWP**")
+                    orig_pred = sol['predicted']
+                    adj_pred  = st.session_state.get('adj_predicted')
+                    adj_gwp   = st.session_state.get('adj_gwp')
+
+                    comp_rows = []
+                    for _lbl, _key in [
+                        ('7-Day Strength',  '7day'),
+                        ('28-Day Strength', '28day'),
+                        ('56-Day Strength', '56day'),
+                    ]:
+                        comp_rows.append({
+                            'Metric': _lbl,
+                            f'Original (NSGA-II)': f"{(orig_pred.get(_key) or 0)*us:.1f} {sl}",
+                            'Adjusted': f"{(adj_pred.get(_key) or 0)*us:.1f} {sl}" if adj_pred else "—",
+                        })
+                    comp_rows.append({
+                        'Metric': 'GWP',
+                        f'Original (NSGA-II)': f"{sol['gwp']:.1f} kg CO₂/m³",
+                        'Adjusted': f"{adj_gwp:.1f} kg CO₂/m³" if adj_gwp is not None else "—",
+                    })
+                    st.dataframe(
+                        pd.DataFrame(comp_rows),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
 
                 st.download_button(
                     "📥 Download Full Pareto Front (CSV)",
