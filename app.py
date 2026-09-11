@@ -564,9 +564,6 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                         feat: float(edited_df.iloc[i][f'Adjusted ({ml})']) / um
                         for i, feat in enumerate(RAW_FEATURES)
                     }
-                    if st.button("🔄 Recalculate", key="recalc_btn"):
-                        st.session_state['adj_predicted'] = rec.predict_all(current_mix)
-                        st.session_state['adj_gwp']       = compute_gwp(current_mix)
 
                 with col_b:
                     st.markdown("**Predicted Strength & GWP**")
@@ -596,12 +593,16 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                         use_container_width=True,
                     )
 
-                st.download_button(
-                    "📥 Download Full Pareto Front (CSV)",
-                    data=pareto_csv(solutions),
-                    file_name="njdot_pareto_front.csv",
-                    mime="text/csv",
-                )
+                    if st.button("🔄 Recalculate", key="recalc_btn"):
+                        st.session_state['adj_predicted'] = rec.predict_all(current_mix)
+                        st.session_state['adj_gwp']       = compute_gwp(current_mix)
+
+                    st.download_button(
+                        "📥 Download Full Pareto Front (CSV)",
+                        data=pareto_csv(solutions),
+                        file_name="njdot_pareto_front.csv",
+                        mime="text/csv",
+                    )
 
     # ═══════════════════════════════════════════════════════════════════════
     # Tab 2 — Historical Similar Mixes
