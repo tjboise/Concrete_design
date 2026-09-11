@@ -538,30 +538,25 @@ def main():
                 col_a, col_b = st.columns([1, 1])
                 with col_a:
                     st.markdown(f"**Selected Mix — Solution #{sel+1}**")
-                    mix_df_edit = pd.DataFrame([
-                        {
-                            'Material': MATERIAL_LABELS.get(k, k),
-                            f'Original ({ml})': round(float(mix.get(k, 0)) * um, 2),
-                            f'Adjusted ({ml})': round(float(mix.get(k, 0)) * um, 2),
-                        }
-                        for k in RAW_FEATURES
-                    ])
-                    edited_df = st.data_editor(
-                        mix_df_edit,
-                        hide_index=True,
-                        use_container_width=True,
-                        column_config={
-                            'Material': st.column_config.TextColumn(disabled=True),
-                            f'Original ({ml})': st.column_config.NumberColumn(disabled=True),
-                            f'Adjusted ({ml})': st.column_config.NumberColumn(
-                                min_value=0.0, step=1.0),
-                        },
-                        key=f"mix_editor_{sel}",
-                    )
-                    current_mix = {
-                        feat: float(edited_df.iloc[i][f'Adjusted ({ml})']) / um
-                        for i, feat in enumerate(RAW_FEATURES)
-                    }
+                    _h1, _h2, _h3 = st.columns([2, 1.3, 1.5])
+                    _h1.markdown(f"**Material**")
+                    _h2.markdown(f"**Original ({ml})**")
+                    _h3.markdown(f"**Adjusted ({ml})**")
+                    adj_vals = {}
+                    for k in RAW_FEATURES:
+                        orig_val = round(float(mix.get(k, 0)) * um, 2)
+                        _r1, _r2, _r3 = st.columns([2, 1.3, 1.5])
+                        _r1.write(MATERIAL_LABELS.get(k, k))
+                        _r2.write(f"{orig_val:.2f}")
+                        adj_vals[k] = _r3.number_input(
+                            label="adj",
+                            value=orig_val,
+                            min_value=0.0,
+                            step=1.0,
+                            key=f"adj_{k}_{sel}",
+                            label_visibility="collapsed",
+                        )
+                    current_mix = {feat: adj_vals[feat] / um for feat in RAW_FEATURES}
 
                 with col_b:
                     st.markdown("**Predicted Strength & GWP**")
