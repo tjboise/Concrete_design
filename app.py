@@ -704,9 +704,6 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                     mime="text/csv",
                 )
 
-                st.markdown("**Material Quantities**")
-                st.plotly_chart(hist_material_chart(df_hist, um, ml),
-                                use_container_width=True)
 
                 # GWP vs Strength scatter for historical mixes
                 fig_sc = go.Figure()
