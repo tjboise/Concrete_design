@@ -545,71 +545,69 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                 m3.metric("Total Cementitious", f"{sol['total_binder']:.0f} kg/m³")
                 m4.metric("w/cm Ratio", f"{sol['wb_ratio']:.3f}")
 
+                # Clear adjusted state when solution selection changes
+                if st.session_state.get('_prev_sel') != sel:
+                    st.session_state.pop('adj_predicted', None)
+                    st.session_state.pop('adj_gwp', None)
+                st.session_state['_prev_sel'] = sel
+
                 col_a, col_b = st.columns([1, 1])
                 with col_a:
-                    st.markdown("**Mix Proportions**")
-                    mix_df = pd.DataFrame([
+                    st.markdown("**Mix Proportions** — edit & recalculate")
+                    mix_df_edit = pd.DataFrame([
                         {'Material': MATERIAL_LABELS.get(k, k),
-                         'Quantity (kg/m³)': round(v, 2)}
-                        for k, v in mix.items() if v > 0.05
+                         f'Qty ({ml})': round(float(mix.get(k, 0)) * um, 2)}
+                        for k in RAW_FEATURES
                     ])
-                    st.dataframe(mix_df, hide_index=True, use_container_width=True)
+                    edited_df = st.data_editor(
+                        mix_df_edit,
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={
+                            'Material': st.column_config.TextColumn(disabled=True),
+                            f'Qty ({ml})': st.column_config.NumberColumn(
+                                min_value=0.0, step=1.0),
+                        },
+                        key=f"mix_editor_{sel}",
+                    )
+                    current_mix = {
+                        feat: float(edited_df.iloc[i][f'Qty ({ml})']) / um
+                        for i, feat in enumerate(RAW_FEATURES)
+                    }
+
+                    if st.button("🔄 Recalculate", key="recalc_btn"):
+                        st.session_state['adj_predicted'] = rec.predict_all(current_mix)
+                        st.session_state['adj_gwp']       = compute_gwp(current_mix)
+
+                    pred     = st.session_state.get('adj_predicted', sol['predicted'])
+                    gwp_show = st.session_state.get('adj_gwp', sol['gwp'])
+                    st.markdown("**Predicted Strength & GWP**")
+                    r1, r2, r3, r4 = st.columns(4)
+                    r1.metric("7-Day",  f"{pred['7day']*us:.1f} {sl}")
+                    if params['min_28d_mpa'] is not None:
+                        r2.metric("28-Day", f"{pred['28day']*us:.1f} {sl}",
+                                  delta=f"{(pred['28day']-params['min_28d_mpa'])*us:+.1f} vs req.",
+                                  delta_color='normal' if pred['28day'] >= params['min_28d_mpa'] else 'inverse')
+                    else:
+                        r2.metric("28-Day", f"{pred['28day']*us:.1f} {sl}")
+                    r3.metric("56-Day", f"{(pred['56day'] or 0)*us:.1f} {sl}")
+                    r4.metric("GWP", f"{gwp_show:.1f} kg CO₂/m³",
+                              delta=f"{gwp_show - sol['gwp']:+.1f} vs selected" if 'adj_gwp' in st.session_state else None,
+                              delta_color='inverse')
 
                     st.markdown("**GWP Breakdown**")
-                    st.plotly_chart(gwp_breakdown_chart(mix), use_container_width=True)
+                    st.plotly_chart(gwp_breakdown_chart(current_mix), use_container_width=True)
 
                 with col_b:
                     st.markdown("**Mix Composition**")
-                    st.plotly_chart(mix_pie_chart(mix), use_container_width=True)
+                    st.plotly_chart(mix_pie_chart(current_mix), use_container_width=True)
 
-                st.markdown("**Predicted Compressive Strength**")
-                st.plotly_chart(
-                    gauge_chart(sol['predicted'], params['min_28d_mpa'], us, sl),
-                    use_container_width=True,
-                )
-
-                # Download
                 st.download_button(
                     "📥 Download Full Pareto Front (CSV)",
                     data=pareto_csv(solutions),
                     file_name="njdot_pareto_front.csv",
                     mime="text/csv",
                 )
-
-                # ── Adjust & Recalculate ──────────────────────────────────
-                st.divider()
-                with st.expander("🔧 Adjust Mix & Recalculate"):
-                    st.caption("Edit material quantities (kg/m³) and recalculate predicted strength and GWP.")
-                    adj_cols = st.columns(5)
-                    adj_mix: dict[str, float] = {}
-                    for i, feat in enumerate(RAW_FEATURES):
-                        with adj_cols[i % 5]:
-                            adj_mix[feat] = st.number_input(
-                                MATERIAL_LABELS.get(feat, feat).split(' ')[0],
-                                value=round(float(mix.get(feat, 0)), 2),
-                                min_value=0.0, step=1.0,
-                                key=f"adj_{feat}",
-                            )
-
-                    if st.button("🔄 Recalculate", key="recalc_btn"):
-                        st.session_state['adj_predicted'] = rec.predict_all(adj_mix)
-                        st.session_state['adj_gwp']       = compute_gwp(adj_mix)
-
-                    if 'adj_predicted' in st.session_state:
-                        ap = st.session_state['adj_predicted']
-                        ag = st.session_state['adj_gwp']
-                        r1, r2, r3, r4 = st.columns(4)
-                        r1.metric("7-Day", f"{ap['7day']*us:.1f} {sl}")
-                        if params['min_28d_mpa'] is not None:
-                            r2.metric("28-Day", f"{ap['28day']*us:.1f} {sl}",
-                                      delta=f"{(ap['28day']-params['min_28d_mpa'])*us:+.1f} vs req.",
-                                      delta_color='normal' if ap['28day'] >= params['min_28d_mpa'] else 'inverse')
-                        else:
-                            r2.metric("28-Day", f"{ap['28day']*us:.1f} {sl}")
-                        r3.metric("56-Day", f"{(ap['56day'] or 0)*us:.1f} {sl}")
-                        r4.metric("GWP",    f"{ag:.1f} kg CO₂/m³",
-                                  delta=f"{ag - sol['gwp']:+.1f} vs selected",
-                                  delta_color='inverse')
 
     # ═══════════════════════════════════════════════════════════════════════
     # Tab 2 — Historical Similar Mixes
