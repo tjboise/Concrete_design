@@ -705,26 +705,6 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                 )
 
 
-                # GWP vs Strength scatter for historical mixes
-                fig_sc = go.Figure()
-                fig_sc.add_trace(go.Scatter(
-                    x=df_hist['GWP'].tolist() if 'GWP' in df_hist.columns else [],
-                    y=(df_hist['28day'] * us).tolist() if '28day' in df_hist.columns else [],
-                    mode='markers+text',
-                    marker=dict(size=14, color=NJDOT_BLUE),
-                    text=[f"Mix {i+1}" for i in range(len(df_hist))],
-                    textposition='top center',
-                ))
-                fig_sc.update_layout(
-                    xaxis_title='GWP (kg CO₂-eq / m³)',
-                    yaxis_title=f'28-Day Strength ({sl})',
-                    height=280,
-                    margin=dict(t=10, b=10, l=0, r=0),
-                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                )
-                st.markdown("**GWP vs Strength Tradeoff**")
-                st.plotly_chart(fig_sc, use_container_width=True)
-
 
 if __name__ == '__main__':
     main()
