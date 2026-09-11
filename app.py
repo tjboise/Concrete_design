@@ -348,22 +348,13 @@ def main():
 [data-testid="stSidebarUserContent"] hr {
     margin: 0.4rem 0;
 }
-/* Circular Run button — centred */
-[data-testid="stSidebarUserContent"] .stButton,
-[data-testid="stSidebarUserContent"] .stButton > div {
-    display: flex !important;
-    justify-content: center !important;
-    align-items: center !important;
-}
+/* Circular Run button */
 [data-testid="stSidebarUserContent"] .stButton button {
-    width: 72px !important;
-    height: 72px !important;
-    min-width: unset !important;
+    aspect-ratio: 1 !important;
     border-radius: 50% !important;
     padding: 0 !important;
     font-size: 1rem;
     font-weight: 600;
-    margin: 0 auto;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -428,7 +419,9 @@ def main():
         n_hist = st.slider("n_hist", 3, 10, 3, label_visibility="collapsed")
 
         st.markdown("---")
-        run_all = st.button("▶ Run", type="primary")
+        _, _mid, _ = st.columns([1, 1, 1])
+        with _mid:
+            run_all = st.button("▶ Run", type="primary", use_container_width=True)
 
     # -----------------------------------------------------------------------
     # Run computations → session state
