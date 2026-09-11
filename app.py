@@ -523,6 +523,7 @@ def main():
                 mix = sol['mix']
 
                 with pc2:
+                    st.markdown("<div style='margin-top:96px'></div>", unsafe_allow_html=True)
                     st.markdown("**Mix Composition**")
                     st.plotly_chart(mix_pie_chart(mix), use_container_width=True)
 
