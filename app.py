@@ -664,24 +664,7 @@ def main():
                 df_disp = df_disp.rename(columns=rename)
                 df_disp.index = [f"Mix {i+1}" for i in range(len(df_disp))]
 
-                st.dataframe(
-                    df_disp,
-                    column_config={
-                        '28-Day': st.column_config.ProgressColumn(
-                            f"28-Day ({sl})",
-                            min_value=0,
-                            max_value=float(df['28day'].max() * us),
-                            format=f"%.1f",
-                        ),
-                        'GWP': st.column_config.ProgressColumn(
-                            "GWP (kg CO₂/m³)",
-                            min_value=0,
-                            max_value=float(df['GWP'].max()),
-                            format="%.0f",
-                        ),
-                    },
-                    use_container_width=True,
-                )
+                st.dataframe(df_disp, use_container_width=True)
 
                 st.download_button(
                     "📥 Download CSV",
