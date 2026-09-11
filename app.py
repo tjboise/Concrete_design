@@ -530,11 +530,6 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
 
                 st.divider()
                 st.subheader(f"Selected Mix — Solution #{sel+1}")
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("GWP", f"{sol['gwp']:.1f} kg CO₂/m³")
-                m2.metric("Pred. 28-Day", f"{sol['strength_28d']*us:.1f} {sl}")
-                m3.metric("Total Cementitious", f"{sol['total_binder']:.0f} kg/m³")
-                m4.metric("w/cm Ratio", f"{sol['wb_ratio']:.3f}")
 
                 # Clear adjusted state when solution selection changes
                 if st.session_state.get('_prev_sel') != sel:
