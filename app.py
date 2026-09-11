@@ -494,35 +494,36 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                 n_sol = len(solutions)
                 params = st.session_state['pareto_params']
 
-                # ── Preference slider ─────────────────────────────────────
-                st.markdown("**Select Your Preferred Solution**")
-                pref = st.slider(
-                    "Preference weight",
-                    min_value=0, max_value=100, value=50, step=1,
-                    format="%d",
-                    help="0 = maximize strength (ignore GWP)   |   100 = minimize GWP (ignore strength)",
-                )
-                col_l, col_r = st.columns(2)
-                col_l.caption("← Maximize Strength")
-                col_r.markdown("<div style='text-align:right'>Minimize GWP →</div>",
-                               unsafe_allow_html=True)
-
-                # Score each Pareto solution
-                gwps = np.array([s['gwp'] for s in solutions])
-                strs = np.array([s['strength_28d'] for s in solutions])
-                g_min, g_rng = gwps.min(), max(gwps.max() - gwps.min(), 1e-9)
-                s_min, s_rng = strs.min(), max(strs.max() - strs.min(), 1e-9)
-                w = pref / 100
-                scores = (1 - w) * (strs - s_min) / s_rng - w * (gwps - g_min) / g_rng
-                sel = int(np.argmax(scores))
-                sol = solutions[sel]
-                mix = sol['mix']
-
                 # Pareto chart + Mix Composition side by side
                 pc1, pc2 = st.columns([3, 2])
                 with pc1:
+                    st.markdown("**Select Your Preferred Solution**")
+                    pref = st.slider(
+                        "Preference weight",
+                        min_value=0, max_value=100, value=50, step=1,
+                        format="%d",
+                        help="0 = maximize strength (ignore GWP)   |   100 = minimize GWP (ignore strength)",
+                    )
+                    _cl, _cr = st.columns(2)
+                    _cl.caption("← Maximize Strength")
+                    _cr.markdown("<div style='text-align:right'>Minimize GWP →</div>",
+                                 unsafe_allow_html=True)
+
+                    # Score each Pareto solution
+                    gwps = np.array([s['gwp'] for s in solutions])
+                    strs = np.array([s['strength_28d'] for s in solutions])
+                    g_min, g_rng = gwps.min(), max(gwps.max() - gwps.min(), 1e-9)
+                    s_min, s_rng = strs.min(), max(strs.max() - strs.min(), 1e-9)
+                    w = pref / 100
+                    scores = (1 - w) * (strs - s_min) / s_rng - w * (gwps - g_min) / g_rng
+                    sel = int(np.argmax(scores))
+
                     st.plotly_chart(pareto_chart(solutions, sel, us, sl),
                                     use_container_width=True)
+
+                sol = solutions[sel]
+                mix = sol['mix']
+
                 with pc2:
                     st.markdown("**Mix Composition**")
                     st.plotly_chart(mix_pie_chart(mix), use_container_width=True)
