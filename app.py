@@ -529,7 +529,6 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                     st.plotly_chart(mix_pie_chart(mix), use_container_width=True)
 
                 st.divider()
-                st.subheader(f"Selected Mix — Solution #{sel+1}")
 
                 # Clear adjusted state when solution selection changes
                 if st.session_state.get('_prev_sel') != sel:
@@ -537,6 +536,7 @@ and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                     st.session_state.pop('adj_gwp', None)
                 st.session_state['_prev_sel'] = sel
 
+                st.header(f"Selected Mix — Solution #{sel+1}")
                 col_a, col_b = st.columns([1, 1])
                 with col_a:
                     st.markdown("**Mix Proportions** — edit Adjusted column & recalculate")
