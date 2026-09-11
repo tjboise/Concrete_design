@@ -482,8 +482,6 @@ def main():
 3. Physics constraints (total volume, aggregate volume fraction)
 
 **Pareto front**: the set of solutions where no objective can be improved without worsening the other.
-The dataset covers {len(df)} mixes with GWP ranging **{df['GWP'].min():.0f}–{df['GWP'].max():.0f} kg CO₂/m³**
-and 28-day strength **{df['28day'].min():.1f}–{df['28day'].max():.1f} MPa**.
                 """)
         else:
             solutions = st.session_state['pareto_solutions']
