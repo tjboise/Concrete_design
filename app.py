@@ -419,7 +419,7 @@ def main():
         n_hist = st.slider("n_hist", 3, 10, 3, label_visibility="collapsed")
 
         st.markdown("---")
-        _, _mid, _ = st.columns([1, 1, 1])
+        _, _mid, _ = st.columns([3, 2, 3])
         with _mid:
             run_all = st.button("▶ Run", type="primary", use_container_width=True)
 
