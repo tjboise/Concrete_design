@@ -457,7 +457,7 @@ def main():
     # -----------------------------------------------------------------------
     # Tabs
     # -----------------------------------------------------------------------
-    tab1, tab2 = st.tabs(["NSGA-II", "Historical Mixes"])
+    tab1, tab2, tab3 = st.tabs(["NSGA-II", "Historical Mixes", "Strength Prediction"])
 
     # ═══════════════════════════════════════════════════════════════════════
     # Tab 1 — Pareto Front
@@ -673,6 +673,74 @@ def main():
                     mime="text/csv",
                 )
 
+
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Tab 3 — Strength Prediction
+    # ═══════════════════════════════════════════════════════════════════════
+    with tab3:
+        st.markdown("Enter a mix design to predict compressive strength and GWP.")
+
+        # Default values: dataset medians
+        _defaults = {k: float(df[k].median()) if k in df.columns else 0.0 for k in RAW_FEATURES}
+
+        sp_c1, sp_c2 = st.columns(2)
+
+        with sp_c1:
+            st.markdown("**Binders & Water**")
+            sp_vals = {}
+            for k in ['PC', 'FA', 'SC', 'WATER']:
+                lo, hi = BOUNDS_L1[k]
+                sp_vals[k] = st.number_input(
+                    f"{MATERIAL_LABELS[k]} ({ml})",
+                    min_value=0.0,
+                    max_value=round(hi * um, 1),
+                    value=round(_defaults[k] * um, 1),
+                    step=1.0,
+                    key=f"sp_{k}",
+                )
+
+            st.markdown("**Aggregates**")
+            for k in ['FAGG', 'CAGG']:
+                lo, hi = BOUNDS_L1[k]
+                sp_vals[k] = st.number_input(
+                    f"{MATERIAL_LABELS[k]} ({ml})",
+                    min_value=0.0,
+                    max_value=round(hi * um, 1),
+                    value=round(_defaults[k] * um, 1),
+                    step=1.0,
+                    key=f"sp_{k}",
+                )
+
+        with sp_c2:
+            st.markdown("**Admixtures**")
+            for k in ['AEA', 'WR_HR', 'WR', 'ACC']:
+                lo, hi = BOUNDS_L1[k]
+                sp_vals[k] = st.number_input(
+                    f"{MATERIAL_LABELS[k]} ({ml})",
+                    min_value=0.0,
+                    max_value=round(hi * um, 3),
+                    value=round(_defaults[k] * um, 3),
+                    step=0.1,
+                    key=f"sp_{k}",
+                )
+
+        st.markdown("---")
+        if st.button("🔍 Predict Strength", type="primary", key="sp_predict_btn"):
+            sp_mix = {feat: sp_vals[feat] / um for feat in RAW_FEATURES}
+            sp_pred = rec.predict_all(sp_mix)
+            sp_gwp  = compute_gwp(sp_mix)
+            st.session_state['sp_result'] = {'pred': sp_pred, 'gwp': sp_gwp}
+
+        if 'sp_result' in st.session_state:
+            sp_pred = st.session_state['sp_result']['pred']
+            sp_gwp  = st.session_state['sp_result']['gwp']
+
+            res_c1, res_c2, res_c3, res_c4 = st.columns(4)
+            res_c1.metric("7-Day Strength",  f"{sp_pred['7day']*us:.1f} {sl}")
+            res_c2.metric("28-Day Strength", f"{sp_pred['28day']*us:.1f} {sl}")
+            res_c3.metric("56-Day Strength", f"{(sp_pred['56day'] or 0)*us:.1f} {sl}")
+            res_c4.metric("GWP",             f"{sp_gwp:.1f} kg CO₂/m³")
 
 
 if __name__ == '__main__':
