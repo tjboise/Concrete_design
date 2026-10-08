@@ -13,5 +13,11 @@ venv/
 # CatBoost training logs
 catboost_info/
 
-# Pre-trained models (CatBoost .cbm files are version-specific; app retrains on startup)
-models/
+# CatBoost chain models (app retrains these on startup from Concrete_Data_SI_clean.csv)
+models/model_7d.cbm
+models/model_28d.cbm
+models/model_56d.cbm
+models/model_7day.pkl
+models/model_28day.pkl
+models/model_56day.pkl
+models/scaler.pkl
