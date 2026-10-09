@@ -8,7 +8,6 @@ import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-import json
 import joblib
 from catboost import CatBoostRegressor
 
@@ -52,8 +51,6 @@ MATERIAL_LABELS = {
     'ACC':   'Accelerator',
 }
 
-MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun',
-               'Jul','Aug','Sep','Oct','Nov','Dec']
 ADMIX = {'AEA', 'WR_HR', 'WR', 'ACC'}
 
 UNIT_S  = {'Metric': 1.0,      'Imperial': 145.038}
@@ -137,38 +134,6 @@ def load_or_train():
     rec = ConcreteRecommender(df, model_7d, model_28d, model_56d)
     return df, rec
 
-
-@st.cache_resource(show_spinner=False)
-def load_panynj_models():
-    slump_model  = joblib.load(os.path.join(MODELS_DIR, 'slump_catboost.pkl'))
-    flex_model   = joblib.load(os.path.join(MODELS_DIR, 'flexural_catboost.pkl'))
-    slump_feats  = json.load(open(os.path.join(MODELS_DIR, 'slump_features.json')))
-    flex_feats   = json.load(open(os.path.join(MODELS_DIR, 'flexural_features.json')))
-    return slump_model, slump_feats, flex_model, flex_feats
-
-
-def predict_panynj(mix_kg, pour_month, slump_model, slump_feats, flex_model, flex_feats):
-    tb = sum(mix_kg.get(k, 0) for k in ['PC', 'FA', 'SC', 'SF'])
-    tb = tb if tb > 0 else 1e-9
-    eng = {
-        'TOTAL_BINDER': tb,
-        'WB_DESIGN':    mix_kg.get('WATER', 0) / tb,
-        'SCM_PCT':      (mix_kg.get('FA', 0) + mix_kg.get('SC', 0) + mix_kg.get('SF', 0)) / tb,
-        'PC_PCT':       mix_kg.get('PC', 0) / tb,
-        'WR_HR_B':      mix_kg.get('WR_HR', 0) / tb,
-        'WR_B':         mix_kg.get('WR', 0) / tb,
-    }
-    time = {
-        'POUR_MONTH': pour_month,
-        'MONTH_SIN':  np.sin(2 * np.pi * pour_month / 12),
-        'MONTH_COS':  np.cos(2 * np.pi * pour_month / 12),
-    }
-    all_f = {**mix_kg, **eng, **time}
-    slump_mm = float(slump_model.predict(
-        np.array([[all_f.get(f, 0) for f in slump_feats]]))[0])
-    flex_psi = float(flex_model.predict(
-        np.array([[all_f.get(f, 0) for f in flex_feats]]))[0])
-    return slump_mm, flex_psi
 
 
 # ---------------------------------------------------------------------------
@@ -406,7 +371,6 @@ def main():
 
     with st.spinner("Loading models… (first run trains CatBoost Chain, ~30–60 s)"):
         df, rec = load_or_train()
-        slump_model, slump_feats, flex_model, flex_feats = load_panynj_models()
 
     # -----------------------------------------------------------------------
     # Sidebar
@@ -718,36 +682,36 @@ def main():
     # Tab 3 — Strength Prediction
     # ═══════════════════════════════════════════════════════════════════════
     with tab3:
-        st.markdown("Enter a mix design to predict **compressive strength**, **slump**, and **28-day flexural strength**.")
+        st.markdown("Enter a mix design to predict compressive strength and GWP.")
 
+        # Default values: dataset medians
         _defaults = {k: float(df[k].median()) if k in df.columns else 0.0 for k in RAW_FEATURES}
 
         sp_c1, sp_c2 = st.columns(2)
-        sp_vals = {}
 
         with sp_c1:
             st.markdown("**Binders & Water**")
+            sp_vals = {}
             for k in ['PC', 'FA', 'SC', 'WATER']:
                 lo, hi = BOUNDS_L1[k]
                 sp_vals[k] = st.number_input(
                     f"{MATERIAL_LABELS[k]} ({ml})",
-                    min_value=0.0, max_value=round(hi * um, 1),
-                    value=round(_defaults[k] * um, 1), step=1.0,
+                    min_value=0.0,
+                    max_value=round(hi * um, 1),
+                    value=round(_defaults[k] * um, 1),
+                    step=1.0,
                     key=f"sp_{k}",
                 )
-            sp_vals['SF'] = st.number_input(
-                f"Silica Fume ({ml})",
-                min_value=0.0, max_value=round(60.0 * um, 1),
-                value=0.0, step=1.0, key="sp_SF",
-            )
 
             st.markdown("**Aggregates**")
             for k in ['FAGG', 'CAGG']:
                 lo, hi = BOUNDS_L1[k]
                 sp_vals[k] = st.number_input(
                     f"{MATERIAL_LABELS[k]} ({ml})",
-                    min_value=0.0, max_value=round(hi * um, 1),
-                    value=round(_defaults[k] * um, 1), step=1.0,
+                    min_value=0.0,
+                    max_value=round(hi * um, 1),
+                    value=round(_defaults[k] * um, 1),
+                    step=1.0,
                     key=f"sp_{k}",
                 )
 
@@ -757,59 +721,29 @@ def main():
                 lo, hi = BOUNDS_L1[k]
                 sp_vals[k] = st.number_input(
                     f"{MATERIAL_LABELS[k]} ({ml})",
-                    min_value=0.0, max_value=round(hi * um, 3),
-                    value=round(_defaults[k] * um, 3), step=0.1,
+                    min_value=0.0,
+                    max_value=round(hi * um, 3),
+                    value=round(_defaults[k] * um, 3),
+                    step=0.1,
                     key=f"sp_{k}",
                 )
 
-            st.markdown("**Pour Month** *(for slump & flexural)*")
-            month_sel = st.selectbox(
-                "Pour Month", options=list(range(1, 13)),
-                format_func=lambda m: MONTH_NAMES[m - 1],
-                index=5, key="sp_month",
-            )
-
         st.markdown("---")
-        if st.button("🔍 Predict", type="primary", key="sp_predict_btn"):
+        if st.button("🔍 Predict Strength", type="primary", key="sp_predict_btn"):
             sp_mix = {feat: sp_vals[feat] / um for feat in RAW_FEATURES}
-            sp_mix['SF'] = sp_vals['SF'] / um
-            sp_pred  = rec.predict_all(sp_mix)
-            sp_gwp   = compute_gwp(sp_mix)
-            slump_mm, flex_psi = predict_panynj(
-                sp_mix, month_sel, slump_model, slump_feats, flex_model, flex_feats)
-            st.session_state['sp_result'] = {
-                'pred': sp_pred, 'gwp': sp_gwp,
-                'slump_mm': slump_mm, 'flex_psi': flex_psi,
-            }
+            sp_pred = rec.predict_all(sp_mix)
+            sp_gwp  = compute_gwp(sp_mix)
+            st.session_state['sp_result'] = {'pred': sp_pred, 'gwp': sp_gwp}
 
         if 'sp_result' in st.session_state:
-            r = st.session_state['sp_result']
-            sp_pred   = r['pred']
-            sp_gwp    = r['gwp']
-            slump_mm  = r['slump_mm']
-            flex_psi  = r['flex_psi']
+            sp_pred = st.session_state['sp_result']['pred']
+            sp_gwp  = st.session_state['sp_result']['gwp']
 
-            st.markdown("#### Compressive Strength & GWP")
             res_c1, res_c2, res_c3, res_c4 = st.columns(4)
-            res_c1.metric("7-Day",  f"{sp_pred['7day']*us:.1f} {sl}")
-            res_c2.metric("28-Day", f"{sp_pred['28day']*us:.1f} {sl}")
-            res_c3.metric("56-Day", f"{(sp_pred['56day'] or 0)*us:.1f} {sl}")
-            res_c4.metric("GWP",    f"{sp_gwp:.1f} kg CO₂/m³")
-
-            st.markdown("#### Workability & Flexural Strength *(PANYNJ models)*")
-            fl_c1, fl_c2 = st.columns(2)
-            if unit_sys == 'Imperial':
-                slump_disp = f"{slump_mm / 25.4:.2f} in"
-            else:
-                slump_disp = f"{slump_mm:.0f} mm"
-            if unit_sys == 'Metric':
-                flex_disp = f"{flex_psi / 145.038:.2f} MPa"
-            else:
-                flex_disp = f"{flex_psi:.0f} psi"
-            fl_c1.metric("Predicted Slump", slump_disp,
-                         help="CatBoost slump model — trained on PANYNJ field data")
-            fl_c2.metric("28-Day Flexural Strength", flex_disp,
-                         help="CatBoost flexural model — trained on PANYNJ field data (R²=0.475)")
+            res_c1.metric("7-Day Strength",  f"{sp_pred['7day']*us:.1f} {sl}")
+            res_c2.metric("28-Day Strength", f"{sp_pred['28day']*us:.1f} {sl}")
+            res_c3.metric("56-Day Strength", f"{(sp_pred['56day'] or 0)*us:.1f} {sl}")
+            res_c4.metric("GWP",             f"{sp_gwp:.1f} kg CO₂/m³")
 
 
 if __name__ == '__main__':
